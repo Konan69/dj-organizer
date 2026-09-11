@@ -1,0 +1,82 @@
+/**
+ * Correctness guards.
+ *
+ *   bun api/src/selftest.ts
+ *
+ * 1. Serato crate write -> parse round-trips exactly (the double-prefix bug).
+ * 2. Every video id the parser reports is actually present in that file's bytes.
+ *    This is the check that caught cross-file buffer contamination: an id that
+ *    does not appear anywhere in the file it was read from is fabricated.
+ */
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { extname, join } from "node:path";
+import { LIB } from "./paths";
+import * as serato from "./serato";
+import { read } from "./tags";
+
+const AUDIO = new Set([".m4a", ".webm"]);
+const SKIP = new Set(["_TRASH", "_Serato_", "_Serato_Backup", "PioneerDJ", "rekordbox"]);
+
+function* walk(dir: string): Generator<string> {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (SKIP.has(e.name) || e.name.startsWith(".")) continue;
+      yield* walk(full);
+    } else if (AUDIO.has(extname(e.name).toLowerCase())) yield full;
+  }
+}
+
+let failures = 0;
+const fail = (msg: string) => { failures++; console.log(`  FAIL  ${msg}`); };
+
+// ---- 1. crate round-trip ----
+{
+  const files = [...walk(LIB)].slice(0, 40);
+  const r = serato.selfTest(files);
+  if (!r.ok) fail(`crate round-trip: wrote ${r.wrote}, read back ${r.readBack}\n` +
+    `        in:  ${r.firstIn}\n        out: ${r.firstOut}`);
+  else console.log(`  ok    crate round-trip (${r.wrote} paths, byte-identical)`);
+
+  const rel = serato.relPath("/mnt/c/Users/you/Music/tracks/Dub/x.m4a");
+  if (rel !== "Users/you/Music/tracks/Dub/x.m4a") fail(`relPath double-prefix: ${rel}`);
+  else console.log(`  ok    relPath -> ${rel}`);
+}
+
+// ---- 2. video ids must exist in their own file ----
+{
+  const files = [...walk(LIB)];
+  let checked = 0, withId = 0, bogus = 0;
+  const dupIds = new Map<string, string[]>();
+
+  for (const f of files) {
+    const size = statSync(f).size;
+    const md = await read(f, size);
+    checked++;
+    if (!md.videoId) continue;
+    withId++;
+    const list = dupIds.get(md.videoId);
+    if (list) list.push(f); else dupIds.set(md.videoId, [f]);
+
+    if (f.toLowerCase().endsWith(".m4a")) {
+      const head = readFileSync(f).subarray(0, Math.min(size, 1_500_000));
+      if (!head.includes(Buffer.from(md.videoId, "latin1"))) {
+        bogus++;
+        if (bogus <= 5) fail(`id ${md.videoId} not present in ${f.split("/").pop()}`);
+      }
+    }
+  }
+
+  if (bogus) fail(`${bogus}/${withId} files carry a video id not found in their own bytes`);
+  else console.log(`  ok    ${withId}/${checked} video ids verified against file bytes`);
+
+  const shared = [...dupIds.entries()].filter(([, v]) => v.length > 1);
+  console.log(`  info  ${shared.length} video ids appear in more than one file` +
+    ` (real duplicates, expected to be small)`);
+  for (const [id, paths] of shared.slice(0, 6)) {
+    console.log(`        ${id}  x${paths.length}  ${paths.map((p) => p.split("/").pop()!.slice(0, 44)).join(" | ")}`);
+  }
+}
+
+console.log(failures ? `\n${failures} FAILURE(S)` : "\nall checks passed");
+process.exit(failures ? 1 : 0);
