@@ -12,7 +12,7 @@
   --violet: #a78bfa;
   --danger: #f87171;
   --warn: #fbbf24;
-  --row: 26px;
+  --row: 46px;
   --radius: 7px;
 }
 
@@ -85,6 +85,24 @@ header {
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .pill.go { background: var(--accent); color: #04201c; border-color: var(--accent); font-weight: 600; }
 .pill.go:hover:not(:disabled) { background: #7bf0dc; }
+.pill.icon { padding: 0; width: 27px; justify-content: center; font-size: 14px; line-height: 1; }
+.pill.icon.on { color: var(--fg); border-color: #333a44; background: #1b1f24; }
+
+/* overflow menu — inspection lives here so the header stays quiet */
+.menuwrap { position: relative; }
+.menuscrim { position: fixed; inset: 0; z-index: 30; }
+.menu {
+  position: absolute; top: 33px; right: 0; z-index: 31; min-width: 232px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
+  padding: 5px; box-shadow: 0 16px 44px rgba(0, 0, 0, 0.62);
+  animation: drop 0.13s ease-out;
+}
+@keyframes drop { from { opacity: 0; transform: translateY(-4px); } }
+.menu button {
+  display: block; width: 100%; text-align: left; padding: 7px 10px;
+  border-radius: 6px; font-size: 12.5px; color: var(--fg-2);
+}
+.menu button:hover { background: #1e232a; color: var(--fg); }
 
 /* ---------- body ---------- */
 .body { display: grid; grid-template-columns: 228px 1fr; min-height: 0; }
@@ -119,7 +137,7 @@ aside {
 .nav .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav .ct { font-size: 11px; color: var(--fg-3); }
 .nav.active .ct { color: var(--accent); }
-.nav .ic { width: 13px; text-align: center; opacity: 0.75; font-size: 11px; flex: none; }
+.nav .ic { width: 11px; text-align: center; opacity: 0.7; font-size: 11px; flex: none; }
 .nav.lock .nm::after {
   content: "manual"; font-size: 9px; color: var(--fg-3); margin-left: 6px;
   border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; vertical-align: 1px;
@@ -138,6 +156,24 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34%;
 }
 .bar .meta { color: var(--fg-3); font-size: 11.5px; white-space: nowrap; }
+.chip {
+  font-size: 10.5px; padding: 2px 7px; border-radius: 99px; white-space: nowrap;
+  border: 1px solid var(--line); color: var(--fg-3); background: var(--panel-2);
+}
+.chip.warn { color: var(--warn); border-color: #4a3a10; background: #1c1706; }
+.chip:hover { filter: brightness(1.25); }
+
+.sortsel { display: flex; align-items: center; gap: 2px; }
+.sortsel select {
+  height: 25px; padding: 0 4px 0 8px; font-size: 11.5px; color: var(--fg-2);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 5px 0 0 5px; border-right: 0; outline: 0; cursor: pointer;
+}
+.sortsel button {
+  height: 25px; width: 24px; font-size: 11px; color: var(--fg-2);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 0 5px 5px 0;
+}
+.sortsel select:hover, .sortsel button:hover { color: var(--fg); background: #1b1f24; }
 .act {
   height: 25px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px;
   font-size: 11.5px; color: var(--fg-2); background: var(--panel-2);
@@ -147,41 +183,44 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 .act.d:hover { color: var(--danger); border-color: #5c2020; background: #1e0f0f; }
 .act.a:hover { color: var(--accent); border-color: #2c4f4a; background: #0f1e1c; }
 
-.head, .row {
-  display: grid;
-  grid-template-columns: 34px minmax(150px, 2.1fr) minmax(110px, 1.3fr) 104px 52px 60px;
-  gap: 10px; align-items: center; padding: 0 14px;
-}
-.head {
-  height: 26px; border-bottom: 1px solid var(--line-soft); flex: none;
-  font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
-  color: var(--fg-3); font-weight: 600; background: var(--panel);
-}
-.head button {
-  cursor: pointer; transition: color 0.15s; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; text-align: left;
-  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
-}
-.head button:hover { color: var(--fg-2); }
-.head .r { text-align: right; }
-
-.list { flex: 1; overflow-y: auto; overflow-x: hidden; }
+/* One row = art + two lines + length. Everything else (bitrate, container,
+   folder inside a playlist) is either on hover or not worth the ink. */
+.list { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0; }
 .row {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) 46px;
+  gap: 11px; align-items: center; padding: 0 14px;
   height: var(--row); border-left: 2px solid transparent;
   color: var(--fg-2); font-size: 12.5px; cursor: default;
 }
 .row:hover { background: #111417; }
 .row.sel { background: #132523; color: var(--fg); border-left-color: var(--accent); }
 .row.sel:hover { background: #173029; }
-.row.playing .ti { color: var(--accent); }
-.row.del { opacity: 0.42; text-decoration: line-through; border-left-color: var(--danger); }
+.row.playing .t1 { color: var(--accent); }
+.row.del { opacity: 0.42; border-left-color: var(--danger); }
+.row.del .t1 { text-decoration: line-through; }
 .row.dragging { opacity: 0.35; }
-.row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .n { color: var(--fg-3); font-size: 10.5px; text-align: right; }
-.row.sel .n, .row.playing .n { color: var(--accent); }
-.ti { color: var(--fg); font-weight: 450; }
-.row .du, .row .br { color: var(--fg-3); font-size: 11px; text-align: right; }
-.row .fo { color: var(--fg-3); font-size: 11.5px; }
+
+.art {
+  width: 34px; height: 34px; border-radius: 5px; object-fit: cover;
+  background: var(--panel-2); flex: none; display: block;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.art.ph {
+  display: grid; place-items: center; color: var(--fg-3);
+  font-size: 13px; font-weight: 600; border: 1px solid var(--line-soft);
+}
+.row.playing .art { box-shadow: 0 0 0 1.5px var(--accent); }
+
+.meta2 { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.t1 {
+  color: var(--fg); font-weight: 450; font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t2 {
+  color: var(--fg-3); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row .du { color: var(--fg-3); font-size: 11px; text-align: right; }
 .tag {
   font-size: 9.5px; padding: 0 4px; border-radius: 3px; border: 1px solid var(--line);
   color: var(--fg-3); vertical-align: 1px; margin-left: 5px;

@@ -5,12 +5,16 @@ import { OpsModal, StoresModal } from "./Stores";
 import { fmtTime, useSelection, useToast, usePlayer } from "./hooks";
 
 type View = { kind: "all" | "unfiled" | "trash" } | { kind: "pl"; id: number };
-type SortKey = "title" | "artist" | "folder" | "duration" | "bitrate";
+type SortKey = "title" | "artist" | "folder" | "duration";
 type Modal = null | "dupes" | "changes" | "upstream" | "stores" | "ops";
 
 const VIEW_TITLE: Record<string, string> = {
   all: "All tracks", unfiled: "Unfiled", trash: "Pending deletes",
 };
+
+const SORTS: [SortKey, string][] = [
+  ["artist", "Artist"], ["title", "Title"], ["folder", "Folder"], ["duration", "Length"],
+];
 
 export function App() {
   const [state, setState] = useState<State | null>(null);
@@ -18,6 +22,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "artist", dir: 1 });
   const [modal, setModal] = useState<Modal>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   const [dropTarget, setDropTarget] = useState<number | "trash" | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null);
@@ -266,15 +271,39 @@ export function App() {
           <kbd>/</kbd>
         </label>
         <div className="spacer" />
-        <button className="pill" onClick={() => setModal("upstream")}>⇅ Upstream</button>
-        <button className="pill" onClick={() => setModal("stores")} title="rekordbox · Serato · filesystem">
-          ◫ Stores
-        </button>
-        <button className={`pill ${state.ops.open ? "dirty" : ""}`} onClick={() => setModal("ops")}>
+        {/* One pill, because only one of these is ever actionable: whether you
+            have unapplied changes. The rest are inspection, and inspection can
+            live behind a menu. */}
+        <button
+          className={`pill ${state.ops.open || dirty ? "dirty" : ""}`}
+          onClick={() => setModal(state.ops.open || dirty ? "changes" : "ops")}
+        >
           <span className="led" />
-          {state.ops.open ? `${state.ops.open} staged` : "No changes"}
+          {state.ops.open ? `${state.ops.open} to apply` : dirty ? "Changes staged" : "In sync"}
         </button>
-        <button className="pill" onClick={() => setModal("changes")}>Changeset</button>
+        <div className="menuwrap">
+          <button
+            className={`pill icon ${menuOpen ? "on" : ""}`}
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-label="More"
+          >⋯</button>
+          {menuOpen ? (
+            <>
+              <div className="menuscrim" onClick={() => setMenuOpen(false)} />
+              <div className="menu">
+                {([
+                  ["upstream", "Compare with YouTube Music"],
+                  ["stores", "Compare rekordbox · Serato · disk"],
+                  ["ops", "Change log"],
+                  ["changes", "Changeset to apply"],
+                  ["dupes", `Duplicates${state.counts.duplicates ? ` (${state.counts.duplicates})` : ""}`],
+                ] as [Modal, string][]).map(([m, label]) => (
+                  <button key={m} onClick={() => { setMenuOpen(false); setModal(m); }}>{label}</button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
       </header>
 
       <div className="body">
@@ -284,23 +313,6 @@ export function App() {
             { onClick: () => setView({ kind: "all" }) })}
           {navItem("unfiled", view.kind === "unfiled", "◇", "Unfiled", state.counts.unfiled || "",
             { onClick: () => setView({ kind: "unfiled" }), cls: state.counts.unfiled ? "warn" : "" })}
-          {navItem("dupes", false, "⧉", "Duplicates", state.counts.duplicates || "",
-            { onClick: () => setModal("dupes"), cls: state.counts.duplicates ? "warn" : "" })}
-
-          <div className="sec">
-            Playlists
-            <button onClick={newPlaylist} title="New playlist">+</button>
-          </div>
-          {state.playlists.map((p) =>
-            navItem(`pl${p.id}`, view.kind === "pl" && view.id === p.id,
-              p.is_manual ? "★" : "♪", p.name, p.count, {
-                onClick: () => setView({ kind: "pl", id: p.id }),
-                drop: () => dropOnPlaylist(p.id),
-                dropKey: p.id,
-                cls: p.is_manual ? "lock" : "",
-              }))}
-
-          <div className="sec">Staged</div>
           {navItem("trash", view.kind === "trash", "⌫", "Pending deletes",
             state.counts.pendingDeletes || "", {
               onClick: () => setView({ kind: "trash" }),
@@ -308,6 +320,19 @@ export function App() {
               dropKey: "trash",
               cls: state.counts.pendingDeletes ? "dngr" : "",
             })}
+
+          <div className="sec">
+            Playlists
+            <button onClick={newPlaylist} title="New playlist">+</button>
+          </div>
+          {state.playlists.map((p) =>
+            navItem(`pl${p.id}`, view.kind === "pl" && view.id === p.id,
+              p.is_manual ? "★" : "", p.name, p.count, {
+                onClick: () => setView({ kind: "pl", id: p.id }),
+                drop: () => dropOnPlaylist(p.id),
+                dropKey: p.id,
+                cls: p.is_manual ? "lock" : "",
+              }))}
         </aside>
 
         <main>
@@ -315,11 +340,30 @@ export function App() {
             <h2>{activePl ? activePl.name : VIEW_TITLE[view.kind]}</h2>
             <span className="meta">
               {shown.length} track{shown.length === 1 ? "" : "s"}
-              {activePl?.is_manual ? " · manually curated" : ""}
-              {webmShown ? ` · ${webmShown} not DJ-readable` : ""}
+              {activePl?.is_manual ? " · yours to curate" : ""}
             </span>
+            {webmShown ? (
+              <button
+                className="chip warn" onClick={() => setModal("dupes")}
+                title={`${webmShown} WebM/Opus file(s). Serato and rekordbox decode neither, ` +
+                  `but each one already has an .m4a twin here — they are spare copies, not gaps.`}
+              >{webmShown} webm</button>
+            ) : null}
             <div className="spacer" />
-            {sel.size ? <span className="meta">{sel.size} selected</span> : null}
+            {!sel.size ? (
+              <label className="sortsel">
+                <select
+                  value={sort.key}
+                  onChange={(e) => setSort((s) => ({ ...s, key: e.target.value as SortKey }))}
+                >
+                  {SORTS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+                <button
+                  onClick={() => setSort((s) => ({ ...s, dir: s.dir === 1 ? -1 : 1 }))}
+                  title="Reverse"
+                >{sort.dir === 1 ? "↑" : "↓"}</button>
+              </label>
+            ) : <span className="meta">{sel.size} selected</span>}
             {sel.size && view.kind === "pl"
               ? <button className="act" onClick={removeFromPlaylist}>Remove from playlist</button> : null}
             {sel.size && view.kind !== "trash"
@@ -330,19 +374,6 @@ export function App() {
               ? <button className="act" onClick={stageToPlan}>
                   Put {state.counts.pendingDeletes} delete{state.counts.pendingDeletes === 1 ? "" : "s"} on the fs plan
                 </button> : null}
-          </div>
-
-          <div className="head">
-            <span />
-            {([["title", "Title", ""], ["artist", "Artist", ""], ["folder", "Folder", ""],
-              ["duration", "Time", "r"], ["bitrate", "Rate", "r"]] as const).map(([k, label, cls]) => (
-              <button
-                key={k} className={cls}
-                onClick={() => setSort((s) => ({ key: k, dir: s.key === k ? (s.dir === 1 ? -1 : 1) : 1 }))}
-              >
-                {label}{sort.key === k ? (sort.dir === 1 ? " ↑" : " ↓") : ""}
-              </button>
-            ))}
           </div>
 
           <div className="list">
@@ -357,9 +388,9 @@ export function App() {
                   : view.kind === "trash" ? "Select tracks and hit Delete to stage them. Staging never moves a file."
                   : "Drag tracks here from another playlist."}
               </div>
-            ) : shown.map((t, i) => (
+            ) : shown.map((t) => (
               <TrackRow
-                key={t.id} track={t} index={i}
+                key={t.id} track={t} showFolder={view.kind !== "pl"}
                 selected={sel.has(t.id)} playing={player.playingId === t.id}
                 dragging={dragCount > 0 && sel.has(t.id)}
                 onMouseDown={(e) => selection.click(t.id, e)}
@@ -429,29 +460,47 @@ export function App() {
   );
 }
 
-function TrackRow({ track, index, selected, playing, dragging, ...rest }: {
-  track: Track; index: number; selected: boolean; playing: boolean; dragging: boolean;
+/**
+ * Cover art comes from the track's YouTube thumbnail, cached server-side. A
+ * track with no art falls back to its initial rather than a broken-image box.
+ */
+function Art({ id, label }: { id: number; label: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className="art ph">{label.slice(0, 1).toUpperCase()}</span>;
+  return (
+    <img
+      className="art" src={`/api/art/${id}`} alt="" loading="lazy" decoding="async"
+      draggable={false} onError={() => setFailed(true)}
+    />
+  );
+}
+
+function TrackRow({ track, showFolder, selected, playing, dragging, ...rest }: {
+  track: Track; showFolder: boolean; selected: boolean; playing: boolean; dragging: boolean;
   onMouseDown: (e: React.MouseEvent) => void;
   onDoubleClick: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
+  const title = track.title ?? track.filename;
+  const sub = [track.artist, showFolder ? track.folder : null].filter(Boolean).join(" · ");
   return (
     <div
       className={`row ${selected ? "sel" : ""} ${playing ? "playing" : ""} ` +
         `${track.pendingDelete ? "del" : ""} ${dragging ? "dragging" : ""}`}
       draggable
+      title={track.bitrate ? `${track.bitrate} kbps · ${track.ext}` : track.ext}
       {...rest}
     >
-      <span className="n">{index + 1}</span>
-      <span className="ti">
-        {track.title ?? track.filename}
-        {track.ext !== "m4a" ? <span className="tag bad">{track.ext}</span> : null}
+      <Art id={track.id} label={title} />
+      <span className="meta2">
+        <span className="t1">
+          {title}
+          {track.ext !== "m4a" ? <span className="tag bad">{track.ext}</span> : null}
+        </span>
+        <span className="t2">{sub || "—"}</span>
       </span>
-      <span>{track.artist ?? "—"}</span>
-      <span className="fo">{track.folder || "—"}</span>
       <span className="du">{fmtTime(track.duration)}</span>
-      <span className="br">{track.bitrate ? `${track.bitrate}k` : "—"}</span>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { cors } from "@elysiajs/cors";
 import { Elysia, t } from "elysia";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import * as art from "./art";
 import * as changes from "./changes";
 import { db, getMeta, log, markDirty, now } from "./db";
 import * as dupes from "./dupes";
@@ -347,6 +348,24 @@ export const app = new Elysia({ prefix: "" })
       }, { body: t.Object({ localPlaylistId: t.Number(), ytmId: t.String() }) })
 
       // ---- audio streaming with Range ----
+      // ---- cover art ----
+      .get("/art/:id", async ({ params, set }) => {
+        const row = db.query<{ video_id: string | null }, [number]>(
+          "SELECT video_id FROM tracks WHERE id=?").get(Number(params.id));
+        const path = row?.video_id ? await art.get(row.video_id) : null;
+        if (!path) { set.status = 404; return { error: "no art" }; }
+        set.headers["content-type"] = "image/jpeg";
+        set.headers["cache-control"] = "public, max-age=31536000, immutable";
+        return new Response(Bun.file(path));
+      })
+      .get("/art", () => art.stats())
+      .post("/art/warm", async () => {
+        const ids = db.query<{ video_id: string }, []>(
+          "SELECT DISTINCT video_id FROM tracks WHERE video_id IS NOT NULL").all()
+          .map((r) => r.video_id);
+        return art.warm(ids);
+      })
+
       .get("/audio/:id", ({ params, headers, set }) => {
         const row = db.query<{ path: string; ext: string }, [number]>(
           "SELECT path,ext FROM tracks WHERE id=?").get(params.id);

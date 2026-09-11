@@ -85,8 +85,8 @@ const fail = (msg: string) => { failures++; console.log(`  FAIL  ${msg}`); };
 {
   const MUTATORS =
     /\b(writeFileSync|writeFile|renameSync|unlinkSync|rmSync|rmdirSync|copyFileSync|Bun\.write)\s*\(/;
-  // db.ts and snapshots.ts write inside data/ only (op log, sqlite snapshots).
-  const DATA_ONLY = new Set(["db.ts", "snapshots.ts"]);
+  // These write inside data/ only: op log, sqlite snapshots, cover-art cache.
+  const DATA_ONLY = new Set(["db.ts", "snapshots.ts", "art.ts"]);
   const offenders: string[] = [];
   for (const fn of readdirSync(import.meta.dir)) {
     if (!fn.endsWith(".ts") || DATA_ONLY.has(fn)) continue;
