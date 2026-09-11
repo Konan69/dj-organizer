@@ -7,6 +7,7 @@ export const WIN_ROOT = "C:";
 export const LIB = "/mnt/c/Users/you/Music/tracks";
 export const TRASH = join(LIB, "_TRASH");
 export const SUBCRATES = "/mnt/c/Users/you/Music/_Serato_/Subcrates";
+export const RBX_DB = "/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox/master.db";
 export const BACKUP_DIR = "/mnt/c/Users/you/.dl";
 
 export const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");

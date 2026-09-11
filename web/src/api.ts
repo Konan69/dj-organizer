@@ -39,3 +39,6 @@ export type Duplicates = Unwrapped<ReturnType<typeof api.duplicates.get>>;
 export type Changes = Unwrapped<ReturnType<typeof api.changes.get>>;
 export type YtmDiff = Unwrapped<ReturnType<typeof api.ytm.diff.get>>;
 export type YtmStatus = Unwrapped<ReturnType<typeof api.ytm.status.get>>;
+export type StoresView = Unwrapped<ReturnType<typeof api.stores.get>>;
+export type Op = Unwrapped<ReturnType<typeof api.ops.get>>[number];
+export type PlanFor = Unwrapped<ReturnType<ReturnType<typeof api.plan>["get"]>>;

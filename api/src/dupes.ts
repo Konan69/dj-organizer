@@ -17,11 +17,18 @@ export type DupTrack = {
   id: number; path: string; filename: string; folder: string; ext: string;
   title: string | null; artist: string | null; bitrate: number | null;
   size: number | null; duration: number | null; video_id: string | null;
-  playlists: number[];
+  content_hash: string | null; playlists: number[];
 };
 
+/**
+ * Ordered by strength of evidence:
+ *   identical — byte-identical audio payload. Not a guess.
+ *   source    — same YouTube video, different encoding (260k vs 132k rip).
+ *   twin      — same folder + stem, different container (.webm beside .m4a).
+ * Filename similarity alone is never enough to call something a duplicate.
+ */
 export type DupGroup = {
-  kind: "twin" | "same";
+  kind: "identical" | "source" | "twin";
   why: string;
   keep: DupTrack;
   redundant: DupTrack[];
@@ -48,7 +55,7 @@ const cmp = (manual: Set<number>) => (a: DupTrack, b: DupTrack) => {
 
 export function find() {
   const rows = db.query<Omit<DupTrack, "playlists">, []>(
-    `SELECT id,path,filename,folder,ext,title,artist,bitrate,size,duration,video_id
+    `SELECT id,path,filename,folder,ext,title,artist,bitrate,size,duration,video_id,content_hash
      FROM tracks WHERE missing=0`).all();
 
   const mem = new Map<number, number[]>();
@@ -78,19 +85,21 @@ export function find() {
     });
   };
 
-  const byStem = new Map<string, DupTrack[]>();
+  // 1. byte-identical audio — the only tier that is proof rather than inference
+  const byHash = new Map<string, DupTrack[]>();
   for (const t of tracks) {
-    const stem = t.filename.slice(0, t.filename.length - extname(t.filename).length);
-    const key = `${t.folder}\u0000${stem}`;
-    const list = byStem.get(key);
-    if (list) list.push(t); else byStem.set(key, [t]);
+    if (!t.content_hash) continue;
+    const list = byHash.get(t.content_hash);
+    if (list) list.push(t); else byHash.set(t.content_hash, [t]);
   }
-  for (const [key, members] of byStem) {
+  for (const members of byHash.values()) {
     if (members.length > 1) {
-      emit("twin", members, `same name in ${key.split("\u0000")[0] || "root"}, different format`);
+      const folders = [...new Set(members.map((m) => m.folder || "root"))].sort();
+      emit("identical", members, `identical audio in ${folders.join(" + ")}`);
     }
   }
 
+  // 2. same source video, different encoding
   const byVid = new Map<string, DupTrack[]>();
   for (const t of tracks) {
     if (!t.video_id || claimed.has(t.id)) continue;
@@ -99,8 +108,23 @@ export function find() {
   }
   for (const members of byVid.values()) {
     if (members.length > 1) {
-      const folders = [...new Set(members.map((m) => m.folder || "root"))].sort();
-      emit("same", members, `same source video in ${folders.join(" + ")}`);
+      const rates = members.map((m) => `${m.bitrate ?? "?"}k`).join(" / ");
+      emit("source", members, `same source video, different encodings (${rates})`);
+    }
+  }
+
+  // 3. same name, different container
+  const byStem = new Map<string, DupTrack[]>();
+  for (const t of tracks) {
+    if (claimed.has(t.id)) continue;
+    const stem = t.filename.slice(0, t.filename.length - extname(t.filename).length);
+    const key = `${t.folder}\u0000${stem}`;
+    const list = byStem.get(key);
+    if (list) list.push(t); else byStem.set(key, [t]);
+  }
+  for (const [key, members] of byStem) {
+    if (members.length > 1) {
+      emit("twin", members, `same name in ${key.split("\u0000")[0] || "root"}, different format`);
     }
   }
 

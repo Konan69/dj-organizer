@@ -45,13 +45,46 @@ CREATE TABLE IF NOT EXISTS ytm_playlists(
 CREATE TABLE IF NOT EXISTS ytm_tracks(
   ytm_id TEXT NOT NULL, video_id TEXT, title TEXT, artist TEXT, sort INTEGER,
   PRIMARY KEY(ytm_id, video_id));
+
+-- Raw observation of an external store at a point in time. Never mutated:
+-- these are the evidence a diff is computed against, so a stale rekordbox or a
+-- crate Serato rewrote on exit is visible as drift rather than silently assumed.
+CREATE TABLE IF NOT EXISTS observations(
+  id INTEGER PRIMARY KEY, store TEXT NOT NULL, observed_at INTEGER NOT NULL,
+  tracks INTEGER, playlists INTEGER, digest TEXT, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_obs_store ON observations(store, observed_at DESC);
+
+-- Append-only, replayable intent log.
+-- Deliberately keyed by content hash + playlist NAME rather than internal ids,
+-- so the same op can be replayed against the filesystem, Serato or rekordbox.
+CREATE TABLE IF NOT EXISTS ops(
+  id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL,
+  playlist TEXT, to_playlist TEXT,
+  track_hash TEXT, track_path TEXT, track_label TEXT,
+  payload TEXT, undone INTEGER DEFAULT 0,
+  applied_serato INTEGER DEFAULT 0, applied_rekordbox INTEGER DEFAULT 0,
+  applied_fs INTEGER DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ix_ops_hash ON ops(track_hash);
+CREATE INDEX IF NOT EXISTS ix_ops_at ON ops(at);
 `);
+
+/** Additive migrations for columns introduced after the first schema. */
+for (const [table, col, decl] of [
+  ["tracks", "content_hash", "TEXT"],
+  ["tracks", "hash_scope", "TEXT"],
+  ["tracks", "hashed_at", "INTEGER"],
+] as const) {
+  const cols = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+}
+db.exec("CREATE INDEX IF NOT EXISTS ix_tracks_hash ON tracks(content_hash)");
 
 export type TrackRow = {
   id: number; path: string; filename: string; folder: string; ext: string;
   title: string | null; artist: string | null; album: string | null;
   genre: string | null; duration: number | null; bitrate: number | null;
   size: number | null; video_id: string | null; added_at: number; missing: number;
+  content_hash: string | null; hash_scope: string | null; hashed_at: number | null;
 };
 
 export type PlaylistRow = {

@@ -32,9 +32,16 @@ function chunk(tag: string, body: Buffer): Buffer {
   return Buffer.concat([Buffer.from(tag, "latin1"), len, body]);
 }
 
-/** In-memory only, used by the round-trip self test. Never written to disk. */
-export function build(relPaths: string[]): Buffer {
-  const parts = [chunk("vrsn", utf16(VRSN))];
+/**
+ * In-memory only, used by the round-trip self test. Never written to disk.
+ *
+ * `preserve` carries forward the non-track chunks of an existing crate. Serato
+ * writes one `ovct` per visible column (song/artist/bpm/key/album/length/comment
+ * with widths) and `osrt` for the sort order; emitting only vrsn+otrk is
+ * accepted by Serato but silently resets that crate's column layout.
+ */
+export function build(relPaths: string[], preserve: Buffer[] = []): Buffer {
+  const parts = [chunk("vrsn", utf16(VRSN)), ...preserve];
   for (const p of relPaths) {
     const inner = utf16(p);
     const len = Buffer.alloc(4);
@@ -42,6 +49,41 @@ export function build(relPaths: string[]): Buffer {
     parts.push(chunk("otrk", Buffer.concat([Buffer.from("ptrk", "latin1"), len, inner])));
   }
   return Buffer.concat(parts);
+}
+
+/**
+ * The chunks of an existing crate that are not `vrsn` and not `otrk` — i.e.
+ * the user's column and sort configuration, which a rewrite must carry over.
+ */
+export function preservedChunks(name: string): Buffer[] {
+  const p = join(SUBCRATES, `${name}.crate`);
+  if (!existsSync(p)) return [];
+  const data = readFileSync(p);
+  const out: Buffer[] = [];
+  let i = 0;
+  while (i + 8 <= data.length) {
+    const tag = data.toString("latin1", i, i + 4);
+    const len = data.readUInt32BE(i + 4);
+    if (tag !== "vrsn" && tag !== "otrk") out.push(data.subarray(i, i + 8 + len));
+    i += 8 + len;
+  }
+  return out;
+}
+
+/** Which non-track chunks a crate currently carries, for reporting. */
+export function describe(name: string) {
+  const p = join(SUBCRATES, `${name}.crate`);
+  if (!existsSync(p)) return null;
+  const data = readFileSync(p);
+  const counts: Record<string, number> = {};
+  let i = 0;
+  while (i + 8 <= data.length) {
+    const tag = data.toString("latin1", i, i + 4);
+    const len = data.readUInt32BE(i + 4);
+    counts[tag] = (counts[tag] ?? 0) + 1;
+    i += 8 + len;
+  }
+  return { crate: name, chunks: counts, bytes: data.length };
 }
 
 /** Absolute WSL paths referenced by a crate. */

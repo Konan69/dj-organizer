@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { PY_DIR } from "./paths";
 
 export async function py<T>(
-  script: "ytm_bridge.py",
+  script: "ytm_bridge.py" | "rekordbox_bridge.py",
   cmd: string,
   payload: unknown = {},
   timeoutMs = 300_000,

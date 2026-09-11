@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { db, log, markDirty, now, setMeta } from "./db";
+import { contentHash } from "./identity";
 import { LIB, TRASH } from "./paths";
 import * as serato from "./serato";
 import { fromFilename, read } from "./tags";
@@ -64,11 +65,40 @@ export async function scan(full = false) {
   const flag = db.query("UPDATE tracks SET missing=1 WHERE path=?");
   for (const p of known.keys()) if (!seen.has(p)) { flag.run(p); missing++; }
 
+  const hashed = await hashPending();
+
   setMeta("last_scan", ts);
   const total = db.query<{ n: number }, []>(
     "SELECT COUNT(*) n FROM tracks WHERE missing=0").get()!.n;
-  log("scan", { full }, `+${added} missing=${missing} total=${total}`);
-  return { added, missing, total };
+  log("scan", { full }, `+${added} missing=${missing} hashed=${hashed} total=${total}`);
+  return { added, missing, total, hashed };
+}
+
+/**
+ * Content-hash any track that lacks one, or whose size changed since hashing.
+ * Identity has to survive renames and folder moves, so it is derived from the
+ * audio payload rather than the path or any timestamp.
+ */
+export async function hashPending(limit = 5000) {
+  const rows = db.query<{ id: number; path: string; size: number | null }, [number]>(
+    `SELECT id,path,size FROM tracks
+     WHERE missing=0 AND (content_hash IS NULL OR hashed_at IS NULL)
+     LIMIT ?`).all(limit);
+  if (!rows.length) return 0;
+
+  const set = db.query(
+    "UPDATE tracks SET content_hash=?, hash_scope=?, hashed_at=? WHERE id=?");
+  const ts = now();
+  let n = 0;
+  for (const r of rows) {
+    try {
+      const size = r.size ?? statSync(r.path).size;
+      const h = await contentHash(r.path, size);
+      set.run(h.hash, h.scope, ts, r.id);
+      n++;
+    } catch { /* unreadable file — leave it unhashed, the scan flags it missing */ }
+  }
+  return n;
 }
 
 /** One-time: the existing .crate files are the current source of truth for membership. */

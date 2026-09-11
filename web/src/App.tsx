@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, unwrap, type State, type Track } from "./api";
 import { ChangesModal, DuplicatesModal, UpstreamModal } from "./Modals";
+import { OpsModal, StoresModal } from "./Stores";
 import { fmtTime, useSelection, useToast, usePlayer } from "./hooks";
 
 type View = { kind: "all" | "unfiled" | "trash" } | { kind: "pl"; id: number };
 type SortKey = "title" | "artist" | "folder" | "duration" | "bitrate";
-type Modal = null | "dupes" | "changes" | "upstream";
+type Modal = null | "dupes" | "changes" | "upstream" | "stores" | "ops";
 
 const VIEW_TITLE: Record<string, string> = {
   all: "All tracks", unfiled: "Unfiled", trash: "Pending deletes",
@@ -267,12 +268,14 @@ export function App() {
         </label>
         <div className="spacer" />
         <button className="pill" onClick={() => setModal("upstream")}>⇅ Upstream</button>
-        <button className={`pill ${dirty ? "dirty" : ""}`} onClick={() => setModal("changes")}>
-          <span className="led" />
-          {dirty
-            ? `${state.changes.tracksAdded + state.changes.tracksRemoved + state.changes.pendingDeletes} staged`
-            : "No changes"}
+        <button className="pill" onClick={() => setModal("stores")} title="rekordbox · Serato · filesystem">
+          ◫ Stores
         </button>
+        <button className={`pill ${state.ops.open ? "dirty" : ""}`} onClick={() => setModal("ops")}>
+          <span className="led" />
+          {state.ops.open ? `${state.ops.open} staged` : "No changes"}
+        </button>
+        <button className="pill" onClick={() => setModal("changes")}>Changeset</button>
       </header>
 
       <div className="body">
@@ -419,6 +422,10 @@ export function App() {
       ) : null}
       {modal === "changes" ? <ChangesModal onClose={() => setModal(null)} notify={show} /> : null}
       {modal === "upstream" ? <UpstreamModal onClose={() => setModal(null)} notify={show} /> : null}
+      {modal === "stores" ? <StoresModal onClose={() => setModal(null)} notify={show} /> : null}
+      {modal === "ops" ? (
+        <OpsModal onClose={() => setModal(null)} notify={show} onChange={() => void load()} />
+      ) : null}
     </div>
   );
 }

@@ -6,8 +6,12 @@ import * as changes from "./changes";
 import { db, getMeta, log, markDirty, now } from "./db";
 import * as dupes from "./dupes";
 import { applyDeletes, bootstrap, scan } from "./library";
+import * as ops from "./ops";
 import { LIB, TRASH, WEB_DIST } from "./paths";
+import * as rbxml from "./rbxml";
+import * as serato from "./serato";
 import * as snapshots from "./snapshots";
+import * as stores from "./stores";
 import * as ytm from "./ytm";
 
 const CT: Record<string, string> = {
@@ -48,6 +52,9 @@ function state() {
 
   const dup = dupes.find();
   const chg = changes.compute().summary;
+  const opStats = ops.stats();
+  const hashed = db.query<{ n: number; h: number }, []>(
+    "SELECT COUNT(*) n, COUNT(content_hash) h FROM tracks WHERE missing=0").get()!;
 
   return {
     playlists,
@@ -61,6 +68,8 @@ function state() {
     duplicateIds: dup.redundantIds,
     reclaim: dup.reclaim,
     changes: chg,
+    ops: opStats,
+    hashing: { total: hashed.n, hashed: hashed.h },
     synced: {
       scan: getMeta("last_scan"),
       ytm: getMeta("last_ytm_sync"),
@@ -108,15 +117,17 @@ export const app = new Elysia({ prefix: "" })
         const row = db.query<{ id: number }, [string, number, number]>(
           "INSERT INTO playlists(name,sort,is_manual,created_at) VALUES(?,?,0,?) RETURNING id",
         ).get(name, max + 1, now())!;
+        ops.record("create_playlist", { playlist: name });
         markDirty("changes");
-        log("create_playlist", { name });
         return { id: row.id, name };
       }, { body: t.Object({ name: t.String() }) })
 
       .patch("/playlist/:id", ({ params, body }) => {
+        const row = db.query<{ name: string }, [number]>(
+          "SELECT name FROM playlists WHERE id=?").get(params.id);
         db.query("UPDATE playlists SET name=? WHERE id=?").run(body.name, params.id);
+        ops.record("rename_playlist", { playlist: row?.name ?? null, toPlaylist: body.name });
         markDirty("changes");
-        log("rename_playlist", { id: params.id, name: body.name });
         return { ok: true };
       }, { params: t.Object({ id: t.Number() }), body: t.Object({ name: t.String() }) })
 
@@ -124,8 +135,8 @@ export const app = new Elysia({ prefix: "" })
         const row = db.query<{ name: string }, [number]>(
           "SELECT name FROM playlists WHERE id=?").get(params.id);
         db.query("DELETE FROM playlists WHERE id=?").run(params.id);
+        if (row) ops.record("delete_playlist", { playlist: row.name });
         markDirty("changes");
-        log("delete_playlist", { id: params.id, name: row?.name });
         return { ok: true };
       }, { params: t.Object({ id: t.Number() }) })
 
@@ -149,7 +160,15 @@ export const app = new Elysia({ prefix: "" })
             for (const tid of body.trackIds) changed += q.run(body.playlistId, tid).changes;
           })();
         }
-        if (changed) { markDirty("changes"); log("membership", { op: body.op, n: changed }); }
+        if (changed) {
+          const pl = db.query<{ name: string }, [number]>(
+            "SELECT name FROM playlists WHERE id=?").get(body.playlistId);
+          if (pl) {
+            ops.recordMembership(body.op === "add" ? "add_to" : "remove_from",
+              pl.name, body.trackIds);
+          }
+          markDirty("changes");
+        }
         return { changed };
       }, {
         body: t.Object({
@@ -175,8 +194,17 @@ export const app = new Elysia({ prefix: "" })
             for (const tid of body.trackIds) removed += rm.run(body.fromPlaylistId, tid).changes;
           }
         })();
-        if (added || removed) markDirty("changes");
-        log("move", { n: body.trackIds.length }, `+${added} -${removed}`);
+        if (added || removed) {
+          const name = (id: number) => db.query<{ name: string }, [number]>(
+            "SELECT name FROM playlists WHERE id=?").get(id)?.name;
+          const to = name(body.toPlaylistId);
+          if (to) ops.recordMembership("add_to", to, body.trackIds);
+          if (removed && body.fromPlaylistId != null) {
+            const from = name(body.fromPlaylistId);
+            if (from) ops.recordMembership("remove_from", from, body.trackIds);
+          }
+          markDirty("changes");
+        }
         return { added, removed };
       }, {
         body: t.Object({
@@ -212,7 +240,51 @@ export const app = new Elysia({ prefix: "" })
 
       .post("/delete/apply", () => {
         snapshots.snapshot("before-apply-deletes");
+        const rows = db.query<
+          { content_hash: string | null; path: string; title: string | null; artist: string | null },
+          []
+        >(`SELECT t.content_hash,t.path,t.title,t.artist
+           FROM pending_deletes p JOIN tracks t ON t.id=p.track_id`).all();
+        for (const r of rows) {
+          ops.record("delete_track", {
+            trackHash: r.content_hash, trackPath: r.path,
+            trackLabel: [r.artist, r.title].filter(Boolean).join(" - "),
+          });
+        }
         return applyDeletes();
+      })
+
+      // ---- stores: observe, compare, and replay plans ----
+      .get("/stores", async () => {
+        const obs = await stores.observeAll();
+        return { comparison: stores.compare(obs), observations: obs };
+      })
+      .get("/stores/history", () => stores.history())
+      .get("/ops", ({ query }) => ops.list(Number(query.limit ?? 500), query.all === "1"))
+      .get("/ops/stats", () => ops.stats())
+      .post("/ops/undo", ({ body }) => ops.undo(body.ids), {
+        body: t.Object({ ids: t.Array(t.Number()) }),
+      })
+      .post("/ops/applied", ({ body }) => ops.markApplied(body.store, body.ids), {
+        body: t.Object({
+          store: t.Union([t.Literal("serato"), t.Literal("rekordbox"), t.Literal("fs")]),
+          ids: t.Array(t.Number()),
+        }),
+      })
+      .get("/plan/:store", ({ params }) => ops.plan(params.store), {
+        params: t.Object({
+          store: t.Union([t.Literal("serato"), t.Literal("rekordbox"), t.Literal("fs")]),
+        }),
+      })
+      .get("/plan/:store/text", ({ params }) => new Response(ops.planText(params.store), {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "content-disposition": `attachment; filename="plan-${params.store}.txt"`,
+        },
+      }), {
+        params: t.Object({
+          store: t.Union([t.Literal("serato"), t.Literal("rekordbox"), t.Literal("fs")]),
+        }),
       })
 
       // ---- duplicates ----
@@ -226,6 +298,32 @@ export const app = new Elysia({ prefix: "" })
       .get("/snapshots", () => snapshots.list())
       .post("/snapshots", ({ body }) => snapshots.snapshot(body?.reason ?? "manual"), {
         body: t.Optional(t.Object({ reason: t.Optional(t.String()) })),
+      })
+
+      // ---- rekordbox XML: the officially documented, non-destructive path ----
+      .get("/export/rekordbox.xml", ({ query }) => {
+        const { xml } = rbxml.build({
+          playlists: query.playlists ? String(query.playlists).split(",") : undefined,
+          includeUnfiled: query.unfiled === "1",
+        });
+        return new Response(xml, {
+          headers: {
+            "content-type": "application/xml; charset=utf-8",
+            "content-disposition": 'attachment; filename="dj-organizer.xml"',
+          },
+        });
+      })
+      .get("/export/rekordbox/info", () => ({
+        ...rbxml.build().stats,
+        steps: rbxml.IMPORT_STEPS,
+        sample: rbxml.build().xml.split("\n").slice(0, 8).join("\n"),
+      }))
+
+      // ---- what a crate rewrite would preserve vs. drop ----
+      .get("/serato/inspect", () => {
+        const names = db.query<{ name: string }, []>(
+          "SELECT name FROM playlists ORDER BY sort,name").all().map((r) => r.name);
+        return names.map((n) => serato.describe(n)).filter(Boolean);
       })
 
       // ---- changeset (read-only; applied by hand) ----
