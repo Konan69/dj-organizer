@@ -85,7 +85,7 @@ export function DuplicatesModal({ playlists, onClose, onResolved, notify }: {
           </button>
           <span className="mut">
             frees {fmtMb(data.reclaim)} · playlists merge into the kept copy first ·
-            nothing is erased until you Apply
+            staging only — no file moves, you delete them yourself
           </span>
         </>
       }

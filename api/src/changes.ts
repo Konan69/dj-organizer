@@ -125,7 +125,7 @@ export function asText() {
   }
 
   if (c.deletes.length) {
-    L.push(`## delete to _TRASH (${c.deletes.length})`);
+    L.push(`## delete by hand (${c.deletes.length}) — this app moves nothing`);
     for (const d of c.deletes) L.push(`  x ${rel(d.path)}${d.reason ? `   [${d.reason}]` : ""}`);
   }
   return L.join("\n");

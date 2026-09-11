@@ -1,7 +1,8 @@
 /**
  * Files never move on disk. Genre folders are storage; playlists are metadata.
- * The only filesystem mutation in the app is applyDeletes(), and that moves
- * files to _TRASH rather than unlinking them.
+ * The app makes no filesystem mutation at all outside its own data/ directory:
+ * no crate write, no rename, no move, no delete. Everything it decides leaves
+ * as a plan the user applies by hand.
  */
 import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync } from "node:fs";

@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { db, log, markDirty, now, setMeta } from "./db";
 import { contentHash } from "./identity";
-import { LIB, TRASH } from "./paths";
+import { LIB } from "./paths";
 import * as serato from "./serato";
 import { fromFilename, read } from "./tags";
 
@@ -138,33 +138,8 @@ export async function bootstrap() {
   return { scan: s, seed };
 }
 
-export function applyDeletes() {
-  const rows = db.query<{ id: number; path: string; filename: string }, []>(
-    "SELECT t.id,t.path,t.filename FROM pending_deletes p JOIN tracks t ON t.id=p.track_id",
-  ).all();
-  mkdirSync(TRASH, { recursive: true });
-
-  const del = db.query("DELETE FROM tracks WHERE id=?");
-  const moved: string[] = [], errors: string[] = [];
-  for (const r of rows) {
-    try {
-      if (existsSync(r.path)) {
-        let dst = join(TRASH, r.filename);
-        let i = 1;
-        while (existsSync(dst)) {
-          const ext = extname(r.filename);
-          dst = join(TRASH, `${basename(r.filename, ext)} (${i++})${ext}`);
-        }
-        renameSync(r.path, dst);
-      }
-      del.run(r.id);
-      moved.push(r.filename);
-    } catch (e) {
-      errors.push(`${r.filename}: ${(e as Error).message}`);
-    }
-  }
-  db.query("DELETE FROM pending_deletes").run();
-  log("apply_deletes", { n: moved.length }, `${errors.length} errors`);
-  if (moved.length) markDirty("changes");
-  return { moved: moved.length, errors, trash: TRASH };
-}
+// There is deliberately no apply/commit function here. This app does not move,
+// rename, or delete a single file on disk. Moving a track is the same violation
+// as rewriting a crate: Serato indexes the library folder, so a file that walks
+// off to _TRASH disappears from Serato's crates just as surely. Deletes stay
+// staged and leave the library through GET /api/plan/fs, applied by hand.

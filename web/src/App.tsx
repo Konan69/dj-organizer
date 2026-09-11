@@ -113,15 +113,14 @@ export function App() {
     });
   };
 
-  const applyDeletes = () => {
+  /** Deletes never touch disk here — they go onto the fs plan you apply yourself. */
+  const stageToPlan = () => {
     const n = state?.counts.pendingDeletes ?? 0;
     if (!n) return;
-    if (!window.confirm(
-      `Move ${n} file(s) to _TRASH?\n\nFiles are moved, never erased — recover them from:\n${state?.trash}`,
-    )) return;
     void run(async () => {
-      const r = await unwrap(api.delete.apply.post());
-      return `${r.moved} moved to _TRASH${r.errors.length ? ` · ${r.errors.length} errors` : ""}`;
+      const r = await unwrap(api.delete.stage.post());
+      window.open("/api/plan/fs/text", "_blank");
+      return `${r.staged} on the fs plan — nothing was moved`;
     });
   };
 
@@ -328,8 +327,8 @@ export function App() {
             {sel.size && view.kind === "trash"
               ? <button className="act a" onClick={undoDelete}>Restore</button> : null}
             {view.kind === "trash" && state.counts.pendingDeletes
-              ? <button className="act d" onClick={applyDeletes}>
-                  Apply {state.counts.pendingDeletes} delete{state.counts.pendingDeletes === 1 ? "" : "s"} → _TRASH
+              ? <button className="act" onClick={stageToPlan}>
+                  Put {state.counts.pendingDeletes} delete{state.counts.pendingDeletes === 1 ? "" : "s"} on the fs plan
                 </button> : null}
           </div>
 
@@ -355,7 +354,7 @@ export function App() {
                     : "No tracks here"}
                 </b>
                 {view.kind === "unfiled" ? "Every track belongs to at least one playlist."
-                  : view.kind === "trash" ? "Select tracks and hit Delete to stage them."
+                  : view.kind === "trash" ? "Select tracks and hit Delete to stage them. Staging never moves a file."
                   : "Drag tracks here from another playlist."}
               </div>
             ) : shown.map((t, i) => (

@@ -7,6 +7,9 @@
  * 2. Every video id the parser reports is actually present in that file's bytes.
  *    This is the check that caught cross-file buffer contamination: an id that
  *    does not appear anywhere in the file it was read from is fabricated.
+ * 3. No module mutates anything outside data/. Hard rule, not a preference: a
+ *    crate rewrite already cost every crate's column layout once, and moving a
+ *    file to _TRASH removes it from Serato just as effectively.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -75,6 +78,28 @@ const fail = (msg: string) => { failures++; console.log(`  FAIL  ${msg}`); };
     ` (real duplicates, expected to be small)`);
   for (const [id, paths] of shared.slice(0, 6)) {
     console.log(`        ${id}  x${paths.length}  ${paths.map((p) => p.split("/").pop()!.slice(0, 44)).join(" | ")}`);
+  }
+}
+
+// ---- 3. no writer may point at the library or the Serato folder ----
+{
+  const MUTATORS =
+    /\b(writeFileSync|writeFile|renameSync|unlinkSync|rmSync|rmdirSync|copyFileSync|Bun\.write)\s*\(/;
+  // db.ts and snapshots.ts write inside data/ only (op log, sqlite snapshots).
+  const DATA_ONLY = new Set(["db.ts", "snapshots.ts"]);
+  const offenders: string[] = [];
+  for (const fn of readdirSync(import.meta.dir)) {
+    if (!fn.endsWith(".ts") || DATA_ONLY.has(fn)) continue;
+    readFileSync(join(import.meta.dir, fn), "utf8").split("\n").forEach((line, i) => {
+      const code = line.replace(/\/\/.*$/, "");
+      if (/^\s*\*/.test(line)) return;
+      if (MUTATORS.test(code)) offenders.push(`${fn}:${i + 1}  ${line.trim()}`);
+    });
+  }
+  if (offenders.length) {
+    fail(`filesystem mutation outside data/:\n        ${offenders.join("\n        ")}`);
+  } else {
+    console.log("  ok    no module mutates the library or the Serato folder");
   }
 }
 

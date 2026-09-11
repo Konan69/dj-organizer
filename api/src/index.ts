@@ -5,9 +5,9 @@ import { join } from "node:path";
 import * as changes from "./changes";
 import { db, getMeta, log, markDirty, now } from "./db";
 import * as dupes from "./dupes";
-import { applyDeletes, bootstrap, scan } from "./library";
+import { bootstrap, scan } from "./library";
 import * as ops from "./ops";
-import { LIB, TRASH, WEB_DIST } from "./paths";
+import { LIB, WEB_DIST } from "./paths";
 import * as rbxml from "./rbxml";
 import * as serato from "./serato";
 import * as snapshots from "./snapshots";
@@ -75,7 +75,6 @@ function state() {
       ytm: getMeta("last_ytm_sync"),
     },
     lib: LIB,
-    trash: TRASH,
   };
 }
 
@@ -238,8 +237,9 @@ export const app = new Elysia({ prefix: "" })
         return { ok: true };
       }, { body: ids })
 
-      .post("/delete/apply", () => {
-        snapshots.snapshot("before-apply-deletes");
+      // Staged deletes become ops on the fs plan and nothing else. There is no
+      // route that moves a file: the app is read-only against the real library.
+      .post("/delete/stage", () => {
         const rows = db.query<
           { content_hash: string | null; path: string; title: string | null; artist: string | null },
           []
@@ -251,7 +251,7 @@ export const app = new Elysia({ prefix: "" })
             trackLabel: [r.artist, r.title].filter(Boolean).join(" - "),
           });
         }
-        return applyDeletes();
+        return { staged: rows.length, plan: "/api/plan/fs/text" };
       })
 
       // ---- stores: observe, compare, and replay plans ----

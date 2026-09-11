@@ -5,7 +5,8 @@ export const MNT_ROOT = "/mnt/c";
 export const WIN_ROOT = "C:";
 
 export const LIB = "/mnt/c/Users/you/Music/tracks";
-export const TRASH = join(LIB, "_TRASH");
+// Everything below LIB and _Serato_ is READ-ONLY to this app. No writer imports
+// these; they exist to be scanned and diffed against, never to be mutated.
 export const SUBCRATES = "/mnt/c/Users/you/Music/_Serato_/Subcrates";
 export const RBX_DB = "/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox/master.db";
 export const BACKUP_DIR = "/mnt/c/Users/you/.dl";
