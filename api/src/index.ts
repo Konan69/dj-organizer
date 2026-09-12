@@ -40,10 +40,12 @@ function state() {
       .all().map((r) => r.track_id));
 
   const tracks = db.query<
-    { id: number; filename: string; folder: string; ext: string; title: string | null;
-      artist: string | null; duration: number | null; bitrate: number | null;
-      size: number | null; video_id: string | null }, []
-  >(`SELECT id, filename, folder, ext, title, artist, duration, bitrate, size, video_id
+    { id: number; path: string; filename: string; folder: string; ext: string;
+      title: string | null; artist: string | null; duration: number | null;
+      bitrate: number | null; size: number | null; video_id: string | null;
+      added_at: number | null }, []
+  >(`SELECT id, path, filename, folder, ext, title, artist, duration, bitrate, size,
+            video_id, added_at
      FROM tracks WHERE missing = 0 ORDER BY artist, title`).all()
     .map((r) => ({
       ...r,

@@ -5,24 +5,53 @@ import { OpsModal, StoresModal } from "./Stores";
 import { fmtTime, useSelection, useToast, usePlayer } from "./hooks";
 
 type View = { kind: "all" | "unfiled" | "trash" } | { kind: "pl"; id: number };
-type SortKey = "title" | "artist" | "folder" | "duration";
+type SortKey = "artist" | "title" | "folder" | "duration" | "bitrate" | "size" | "added_at";
 type Modal = null | "dupes" | "changes" | "upstream" | "stores" | "ops";
+type Quality = "any" | "lossless" | "lossy";
+
+type Filters = {
+  folder: string;
+  quality: Quality;
+  dupes: boolean;
+  staged: boolean;
+  shared: boolean;
+};
+
+const NO_FILTERS: Filters = {
+  folder: "", quality: "any", dupes: false, staged: false, shared: false,
+};
 
 const VIEW_TITLE: Record<string, string> = {
   all: "All tracks", unfiled: "Unfiled", trash: "Pending deletes",
 };
 
 const SORTS: [SortKey, string][] = [
-  ["artist", "Artist"], ["title", "Title"], ["folder", "Folder"], ["duration", "Length"],
+  ["artist", "Artist"], ["title", "Title"], ["folder", "Folder"],
+  ["duration", "Length"], ["bitrate", "Quality"], ["size", "File size"],
+  ["added_at", "Recently added"],
 ];
+
+/** Text reads best A–Z; numbers almost always read best biggest-first. */
+const DESC_BY_DEFAULT = new Set<SortKey>(["duration", "bitrate", "size", "added_at"]);
+
+const fmtSize = (n: number | null) =>
+  n == null ? "—" : n >= 1 << 20 ? `${Math.round(n / (1 << 20))} MB` : `${Math.round(n / 1024)} KB`;
+
+const MENU_W = 236;
+
+type RowMenuState = {
+  track: Track; ids: number[]; x: number; y: number; mode: "actions" | "playlists";
+};
 
 export function App() {
   const [state, setState] = useState<State | null>(null);
   const [view, setView] = useState<View>({ kind: "all" });
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "artist", dir: 1 });
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [modal, setModal] = useState<Modal>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [dragCount, setDragCount] = useState(0);
   const [dropTarget, setDropTarget] = useState<number | "trash" | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null);
@@ -41,6 +70,17 @@ export function App() {
   useEffect(() => { void load(); }, [load]);
 
   /* ---------- derived list ---------- */
+  const folders = useMemo(
+    () => [...new Set(state?.tracks.map((t) => t.folder) ?? [])].filter(Boolean).sort(),
+    [state],
+  );
+  const dupeIds = useMemo(() => new Set(state?.duplicateIds ?? []), [state]);
+
+  /** Everything the view itself does not already decide. */
+  const activeFilters =
+    (filters.folder ? 1 : 0) + (filters.quality !== "any" ? 1 : 0) +
+    (filters.dupes ? 1 : 0) + (filters.staged ? 1 : 0) + (filters.shared ? 1 : 0);
+
   const shown = useMemo(() => {
     if (!state) return [];
     let t = state.tracks;
@@ -48,26 +88,60 @@ export function App() {
     else if (view.kind === "trash") t = t.filter((x) => x.pendingDelete);
     else if (view.kind === "pl") t = t.filter((x) => x.playlists.includes(view.id));
 
-    const q = query.trim().toLowerCase();
-    if (q) {
-      t = t.filter((x) =>
-        `${x.title ?? ""} ${x.artist ?? ""} ${x.filename}`.toLowerCase().includes(q));
+    // Every term must match something, so "skrillex dnb" narrows instead of
+    // returning everything by either word.
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length) {
+      t = t.filter((x) => {
+        const hay = `${x.title ?? ""} ${x.artist ?? ""} ${x.folder} ${x.filename}`.toLowerCase();
+        return terms.every((w) => hay.includes(w));
+      });
     }
+
+    if (filters.folder) t = t.filter((x) => x.folder === filters.folder);
+    if (filters.quality === "lossless") t = t.filter((x) => (x.bitrate ?? 0) > 400);
+    if (filters.quality === "lossy") t = t.filter((x) => (x.bitrate ?? 0) <= 400);
+    if (filters.dupes) t = t.filter((x) => dupeIds.has(x.id));
+    if (filters.staged) t = t.filter((x) => x.pendingDelete);
+    if (filters.shared) t = t.filter((x) => x.playlists.length > 1);
+
     const { key, dir } = sort;
     return [...t].sort((a, b) => {
       const x = a[key], y = b[key];
-      if (typeof x === "number" || typeof y === "number") {
+      if (key === "duration" || key === "bitrate" || key === "size" || key === "added_at") {
         return (((x as number) ?? 0) - ((y as number) ?? 0)) * dir;
       }
       return String(x ?? "").localeCompare(String(y ?? ""), undefined, { sensitivity: "base" }) * dir;
     });
-  }, [state, view, query, sort]);
+  }, [state, view, query, sort, filters, dupeIds]);
 
   const selection = useSelection(shown);
   const { sel } = selection;
+  /**
+   * A selection outlives the filter that made it, so every bulk action works
+   * from the visible intersection. Narrowing the list can only ever narrow
+   * what a button is about to touch — never hide part of its blast radius.
+   */
   const selected = useMemo(() => shown.filter((t) => sel.has(t.id)), [shown, sel]);
+  const selIds = useMemo(() => selected.map((t) => t.id), [selected]);
 
   const activePl = view.kind === "pl" ? state?.playlists.find((p) => p.id === view.id) : undefined;
+
+  /** What the view holds before search and filters cut it down. */
+  const total = !state ? 0
+    : view.kind === "unfiled" ? state.counts.unfiled
+    : view.kind === "trash" ? state.counts.pendingDeletes
+    : view.kind === "pl" ? activePl?.count ?? 0
+    : state.counts.tracks;
+
+  const openRowMenu = useCallback(
+    (rect: DOMRect, track: Track, ids: number[], mode: "actions" | "playlists") => {
+      setRowMenu({
+        track, ids, mode,
+        x: Math.max(8, Math.min(rect.right - MENU_W, window.innerWidth - MENU_W - 8)),
+        y: Math.min(rect.bottom + 6, window.innerHeight - 340),
+      });
+    }, []);
 
   /* ---------- mutations ---------- */
   const run = useCallback(async (fn: () => Promise<string | void>) => {
@@ -87,20 +161,53 @@ export function App() {
     });
   };
 
-  const removeFromPlaylist = () => {
-    if (view.kind !== "pl") return;
-    const ids = [...sel];
+  const removeFrom = (playlistId: number, ids: number[]) => {
     void run(async () => {
-      const r = await unwrap(api.membership.post({
-        trackIds: ids, playlistId: view.id, op: "remove",
-      }));
+      const r = await unwrap(api.membership.post({ trackIds: ids, playlistId, op: "remove" }));
       selection.clear();
       return `Removed ${r.changed}`;
     });
   };
 
+  const removeFromPlaylist = () => {
+    if (view.kind !== "pl" || !selIds.length) return;
+    removeFrom(view.id, selIds);
+  };
+
+  const addTo = (playlistId: number, ids: number[]) => {
+    const name = state?.playlists.find((p) => p.id === playlistId)?.name ?? "";
+    void run(async () => {
+      const r = await unwrap(api.membership.post({ trackIds: ids, playlistId, op: "add" }));
+      return r.changed ? `Added ${r.changed} → ${name}` : "Already in that playlist";
+    });
+  };
+
+  /**
+   * Row actions follow the selection when the row is part of it, and otherwise
+   * act on just that row — so hovering a track you never selected can't quietly
+   * operate on a dozen others.
+   */
+  const targetIds = useCallback(
+    (id: number) => (sel.has(id) && selIds.length > 1 ? selIds : [id]),
+    [sel, selIds],
+  );
+
+  const stageDeleteIds = (ids: number[]) => {
+    void run(async () => {
+      await unwrap(api.delete.post({ trackIds: ids }));
+      return `${ids.length} staged — nothing deleted yet`;
+    });
+  };
+
+  const undoDeleteIds = (ids: number[]) => {
+    void run(async () => {
+      await unwrap(api.delete.undo.post({ trackIds: ids }));
+      return "Restored";
+    });
+  };
+
   const stageDelete = () => {
-    const ids = [...sel];
+    const ids = selIds;
     if (!ids.length) return;
     void run(async () => {
       await unwrap(api.delete.post({ trackIds: ids }));
@@ -110,9 +217,9 @@ export function App() {
   };
 
   const undoDelete = () => {
-    const ids = [...sel];
+    if (!selIds.length) return;
     void run(async () => {
-      await unwrap(api.delete.undo.post({ trackIds: ids }));
+      await unwrap(api.delete.undo.post({ trackIds: selIds }));
       selection.clear();
       return "Restored";
     });
@@ -194,7 +301,11 @@ export function App() {
     const h = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (el.tagName === "INPUT") { if (e.key === "Escape") el.blur(); return; }
+      if (el.tagName === "SELECT" || el.tagName === "BUTTON") {
+        if (e.key !== "Escape") return;
+      }
       if (modal) return;
+      if (rowMenu) { if (e.key === "Escape") setRowMenu(null); return; }
       if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); return; }
       if (e.key === "Escape") { selection.clear(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key === "a") { e.preventDefault(); selection.selectAll(); return; }
@@ -205,7 +316,9 @@ export function App() {
         else player.toggle();
         return;
       }
-      if ((e.key === "Delete" || e.key === "Backspace") && sel.size) { e.preventDefault(); stageDelete(); }
+      if ((e.key === "Delete" || e.key === "Backspace") && selIds.length) {
+        e.preventDefault(); stageDelete();
+      }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -313,7 +426,7 @@ export function App() {
             { onClick: () => setView({ kind: "all" }) })}
           {navItem("unfiled", view.kind === "unfiled", "◇", "Unfiled", state.counts.unfiled || "",
             { onClick: () => setView({ kind: "unfiled" }), cls: state.counts.unfiled ? "warn" : "" })}
-          {navItem("trash", view.kind === "trash", "⌫", "Pending deletes",
+          {navItem("trash", view.kind === "trash", "✕", "Pending deletes",
             state.counts.pendingDeletes || "", {
               onClick: () => setView({ kind: "trash" }),
               drop: dropOnTrash,
@@ -339,41 +452,92 @@ export function App() {
           <div className="bar">
             <h2>{activePl ? activePl.name : VIEW_TITLE[view.kind]}</h2>
             <span className="meta">
-              {shown.length} track{shown.length === 1 ? "" : "s"}
+              {shown.length === total ? `${total} tracks`
+                : `${shown.length} of ${total}`}
               {activePl?.is_manual ? " · yours to curate" : ""}
             </span>
+            <div className="spacer" />
+            {selected.length ? (
+              <>
+                <span className="meta sel-n">{selected.length} selected</span>
+                <button className="act" onClick={(e) =>
+                  openRowMenu(e.currentTarget.getBoundingClientRect(), selected[0]!, selIds, "playlists")
+                }>Add to…</button>
+                {view.kind === "pl"
+                  ? <button className="act" onClick={removeFromPlaylist}>Remove</button> : null}
+                {view.kind === "trash"
+                  ? <button className="act a" onClick={undoDelete}>Restore</button>
+                  : <button className="act d" onClick={stageDelete}>Delete</button>}
+              </>
+            ) : null}
+            {view.kind === "trash" && state.counts.pendingDeletes
+              ? <button className="act" onClick={stageToPlan}>
+                  Put {state.counts.pendingDeletes} on the fs plan
+                </button> : null}
+          </div>
+
+          {/* Filters narrow what the sidebar already chose; sort stays pinned
+              right so it never trades places with the selection buttons. */}
+          <div className="fbar">
+            <select
+              className={`fsel ${filters.folder ? "on" : ""}`} value={filters.folder}
+              onChange={(e) => setFilters((f) => ({ ...f, folder: e.target.value }))}
+            >
+              <option value="">Any folder</option>
+              {folders.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <select
+              className={`fsel ${filters.quality !== "any" ? "on" : ""}`} value={filters.quality}
+              onChange={(e) => setFilters((f) => ({ ...f, quality: e.target.value as Quality }))}
+            >
+              <option value="any">Any quality</option>
+              <option value="lossless">Lossless only</option>
+              <option value="lossy">Compressed only</option>
+            </select>
+
+            {([
+              ["dupes", `Duplicates${state.counts.duplicates ? ` ${state.counts.duplicates}` : ""}`,
+                "Redundant copies the app has matched by audio content"],
+              ["shared", "In 2+ playlists", "Tracks filed in more than one playlist"],
+              ["staged", "Staged to delete", "Tracks queued onto the fs plan"],
+            ] as [keyof Filters, string, string][]).map(([k, label, hint]) => (
+              <button
+                key={k} title={hint}
+                className={`chip ${filters[k] ? "on" : ""}`}
+                onClick={() => setFilters((f) => ({ ...f, [k]: !f[k] }))}
+              >{label}</button>
+            ))}
+
             {webmShown ? (
               <button
                 className="chip warn" onClick={() => setModal("dupes")}
-                title={`${webmShown} WebM/Opus file(s). Serato and rekordbox decode neither, ` +
-                  `but each one already has an .m4a twin here — they are spare copies, not gaps.`}
+                title={`${webmShown} WebM/Opus file(s) — Serato and rekordbox read neither, ` +
+                  `and each already has a lossless .m4a twin here. Spare copies, not gaps.`}
               >{webmShown} webm</button>
             ) : null}
+
+            {activeFilters || query ? (
+              <button className="chip clear" onClick={() => { setFilters(NO_FILTERS); setQuery(""); }}>
+                × Clear
+              </button>
+            ) : null}
+
             <div className="spacer" />
-            {!sel.size ? (
-              <label className="sortsel">
-                <select
-                  value={sort.key}
-                  onChange={(e) => setSort((s) => ({ ...s, key: e.target.value as SortKey }))}
-                >
-                  {SORTS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-                </select>
-                <button
-                  onClick={() => setSort((s) => ({ ...s, dir: s.dir === 1 ? -1 : 1 }))}
-                  title="Reverse"
-                >{sort.dir === 1 ? "↑" : "↓"}</button>
-              </label>
-            ) : <span className="meta">{sel.size} selected</span>}
-            {sel.size && view.kind === "pl"
-              ? <button className="act" onClick={removeFromPlaylist}>Remove from playlist</button> : null}
-            {sel.size && view.kind !== "trash"
-              ? <button className="act d" onClick={stageDelete}>Delete</button> : null}
-            {sel.size && view.kind === "trash"
-              ? <button className="act a" onClick={undoDelete}>Restore</button> : null}
-            {view.kind === "trash" && state.counts.pendingDeletes
-              ? <button className="act" onClick={stageToPlan}>
-                  Put {state.counts.pendingDeletes} delete{state.counts.pendingDeletes === 1 ? "" : "s"} on the fs plan
-                </button> : null}
+            <label className="sortsel">
+              <select
+                value={sort.key}
+                onChange={(e) => {
+                  const key = e.target.value as SortKey;
+                  setSort({ key, dir: DESC_BY_DEFAULT.has(key) ? -1 : 1 });
+                }}
+              >
+                {SORTS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </select>
+              <button
+                onClick={() => setSort((s) => ({ ...s, dir: s.dir === 1 ? -1 : 1 }))}
+                title={sort.dir === 1 ? "Ascending" : "Descending"}
+              >{sort.dir === 1 ? "↑" : "↓"}</button>
+            </label>
           </div>
 
           <div className="list">
@@ -390,13 +554,24 @@ export function App() {
               </div>
             ) : shown.map((t) => (
               <TrackRow
-                key={t.id} track={t} showFolder={view.kind !== "pl"}
+                key={t.id} track={t} showFolder={view.kind !== "pl"} sortKey={sort.key}
                 selected={sel.has(t.id)} playing={player.playingId === t.id}
+                paused={player.paused} menuOpen={rowMenu?.track.id === t.id}
                 dragging={dragCount > 0 && sel.has(t.id)}
                 onMouseDown={(e) => selection.click(t.id, e)}
                 onDoubleClick={() => player.play(t.id)}
                 onDragStart={(e) => onDragStart(e, t.id)}
                 onDragEnd={onDragEnd}
+                onPlay={() => {
+                  if (player.playingId === t.id) player.toggle();
+                  else player.play(t.id);
+                }}
+                onAdd={(rect) => openRowMenu(rect, t, targetIds(t.id), "playlists")}
+                onMore={(rect) => openRowMenu(rect, t, targetIds(t.id), "actions")}
+                onDelete={() => (t.pendingDelete ? undoDeleteIds : stageDeleteIds)(targetIds(t.id))}
+                onRemove={view.kind === "pl"
+                  ? () => removeFrom(view.id, targetIds(t.id))
+                  : undefined}
               />
             ))}
           </div>
@@ -434,6 +609,86 @@ export function App() {
           onChange={(e) => player.setVolume(Number(e.target.value))}
         />
       </footer>
+
+      {/* Pinned to the viewport, not to the row: the list scrolls and clips, and
+          a menu that vanishes when you reach for it is worse than no menu. The
+          playlist picker swaps in place rather than flying out sideways. */}
+      {rowMenu ? (
+        <>
+          <div className="menuscrim" onClick={() => setRowMenu(null)} />
+          <div className="menu float" style={{ left: rowMenu.x, top: rowMenu.y, width: MENU_W }}>
+            {rowMenu.mode === "actions" ? (
+              <>
+                <div className="mhd">
+                  {rowMenu.ids.length > 1
+                    ? `${rowMenu.ids.length} tracks`
+                    : rowMenu.track.title ?? rowMenu.track.filename}
+                </div>
+                <button onClick={() => {
+                  const id = rowMenu.track.id;
+                  if (player.playingId === id) player.toggle(); else player.play(id);
+                  setRowMenu(null);
+                }}>
+                  {player.playingId === rowMenu.track.id && !player.paused ? "Pause" : "Play"}
+                </button>
+                <button onClick={() => setRowMenu({ ...rowMenu, mode: "playlists" })}>
+                  Add to playlist…
+                </button>
+                {view.kind === "pl" && activePl ? (
+                  <button onClick={() => { removeFrom(view.id, rowMenu.ids); setRowMenu(null); }}>
+                    Remove from “{activePl.name}”
+                  </button>
+                ) : null}
+                <div className="msep" />
+                {rowMenu.track.video_id ? (
+                  <button onClick={() => {
+                    window.open(`https://www.youtube.com/watch?v=${rowMenu.track.video_id}`, "_blank");
+                    setRowMenu(null);
+                  }}>Open on YouTube</button>
+                ) : null}
+                <button onClick={() => {
+                  void navigator.clipboard.writeText(rowMenu.track.path);
+                  setRowMenu(null);
+                  show("Path copied", "ok");
+                }}>Copy file path</button>
+                <div className="msep" />
+                {rowMenu.track.pendingDelete ? (
+                  <button className="good" onClick={() => { undoDeleteIds(rowMenu.ids); setRowMenu(null); }}>
+                    Unstage delete
+                  </button>
+                ) : (
+                  <button className="bad" onClick={() => { stageDeleteIds(rowMenu.ids); setRowMenu(null); }}>
+                    Stage delete
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="mhd">
+                  <button className="back" onClick={() => setRowMenu({ ...rowMenu, mode: "actions" })}>‹</button>
+                  Add {rowMenu.ids.length > 1 ? `${rowMenu.ids.length} tracks` : "track"} to
+                </div>
+                <div className="mlist">
+                  {state.playlists.map((p) => {
+                    const already = rowMenu.ids.every((id) =>
+                      state.tracks.find((t) => t.id === id)?.playlists.includes(p.id));
+                    return (
+                      <button
+                        key={p.id} disabled={already}
+                        onClick={() => { addTo(p.id, rowMenu.ids); setRowMenu(null); }}
+                      >
+                        <span className="ic">{p.is_manual ? "★" : ""}</span>
+                        <span className="nm">{p.name}</span>
+                        <span className="ct">{already ? "✓" : p.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      ) : null}
 
       {ghost && dragCount ? (
         <div className="ghost" style={{ left: ghost.x, top: ghost.y }}>
@@ -475,8 +730,23 @@ function Art({ id, label }: { id: number; label: string }) {
   );
 }
 
-function TrackRow({ track, showFolder, selected, playing, dragging, ...rest }: {
-  track: Track; showFolder: boolean; selected: boolean; playing: boolean; dragging: boolean;
+/**
+ * Actions sit in a column that is always there and merely fades in, so the row
+ * never reflows under the cursor and the buttons stay exactly where the eye
+ * last saw them. They are inside the row, so reaching for one keeps :hover.
+ */
+function TrackRow({
+  track, showFolder, sortKey, selected, playing, paused, menuOpen, dragging,
+  onPlay, onAdd, onMore, onDelete, onRemove, ...rest
+}: {
+  track: Track; showFolder: boolean; sortKey: SortKey;
+  selected: boolean; playing: boolean; paused: boolean; menuOpen: boolean; dragging: boolean;
+  onPlay: () => void;
+  onAdd: (rect: DOMRect) => void;
+  onMore: (rect: DOMRect) => void;
+  onDelete: () => void;
+  /** Only inside a playlist, where unfiling beats deleting. */
+  onRemove?: () => void;
   onMouseDown: (e: React.MouseEvent) => void;
   onDoubleClick: () => void;
   onDragStart: (e: React.DragEvent) => void;
@@ -484,23 +754,62 @@ function TrackRow({ track, showFolder, selected, playing, dragging, ...rest }: {
 }) {
   const title = track.title ?? track.filename;
   const sub = [track.artist, showFolder ? track.folder : null].filter(Boolean).join(" · ");
+
+  // The trailing column answers whatever you sorted by, so the ordering is
+  // legible instead of mysterious.
+  const trail = sortKey === "size" ? fmtSize(track.size)
+    : sortKey === "bitrate" ? (track.bitrate ? `${track.bitrate}k` : "—")
+    : fmtTime(track.duration);
+
+  // A click on an action must not also re-select the row underneath it.
+  const act = (fn: (r: DOMRect) => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn(e.currentTarget.getBoundingClientRect());
+  };
+
   return (
     <div
       className={`row ${selected ? "sel" : ""} ${playing ? "playing" : ""} ` +
-        `${track.pendingDelete ? "del" : ""} ${dragging ? "dragging" : ""}`}
+        `${track.pendingDelete ? "del" : ""} ${dragging ? "dragging" : ""} ` +
+        `${menuOpen ? "menuon" : ""}`}
       draggable
-      title={track.bitrate ? `${track.bitrate} kbps · ${track.ext}` : track.ext}
+      title={`${track.bitrate ? `${track.bitrate} kbps · ` : ""}${track.ext} · ${fmtSize(track.size)}`}
       {...rest}
     >
-      <Art id={track.id} label={title} />
+      <span className="artwrap" onClick={(e) => { e.stopPropagation(); onPlay(); }}>
+        <Art id={track.id} label={title} />
+        <span className="artplay">{playing && !paused ? "❚❚" : "▶"}</span>
+      </span>
+
       <span className="meta2">
         <span className="t1">
           {title}
           {track.ext !== "m4a" ? <span className="tag bad">{track.ext}</span> : null}
+          {(track.bitrate ?? 0) > 400 ? <span className="tag good">lossless</span> : null}
         </span>
         <span className="t2">{sub || "—"}</span>
       </span>
-      <span className="du">{fmtTime(track.duration)}</span>
+
+      {/* Two shortcuts and a menu. In a playlist the useful second action is
+          unfiling, not deleting — deleting is still one step away under ⋯. */}
+      <span className="acts" draggable={false} onDragStart={(e) => e.preventDefault()}>
+        <button title="Add to playlist…" onClick={act(onAdd)}>＋</button>
+        {onRemove ? (
+          <button
+            className="bad" title="Remove from this playlist"
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          >−</button>
+        ) : (
+          <button
+            className={track.pendingDelete ? "good" : "bad"}
+            title={track.pendingDelete ? "Unstage delete" : "Stage delete"}
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          >{track.pendingDelete ? "↺" : "✕"}</button>
+        )}
+        <button title="More…" onClick={act(onMore)}>⋯</button>
+      </span>
+
+      <span className="du">{trail}</span>
     </div>
   );
 }

@@ -103,6 +103,28 @@ header {
   border-radius: 6px; font-size: 12.5px; color: var(--fg-2);
 }
 .menu button:hover { background: #1e232a; color: var(--fg); }
+.menu button:disabled { color: var(--fg-3); opacity: 0.5; cursor: default; background: none; }
+.menu.float { position: fixed; }
+.menu button.bad:hover { background: #1e0f0f; color: var(--danger); }
+.menu button.good:hover { background: #0f1e1c; color: var(--accent); }
+.msep { height: 1px; background: var(--line-soft); margin: 4px 6px; }
+.mhd {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 10px 7px; font-size: 10.5px; color: var(--fg-3);
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-bottom: 1px solid var(--line-soft); margin-bottom: 4px;
+}
+.mhd .back {
+  width: 18px; padding: 0; margin-left: -4px; font-size: 14px;
+  color: var(--fg-3); text-align: center;
+}
+.mhd .back:hover { color: var(--fg); background: none; }
+.mlist { max-height: 268px; overflow-y: auto; }
+.mlist button { display: flex; align-items: center; gap: 7px; }
+.mlist .ic { width: 10px; font-size: 9px; color: var(--warn); flex: none; }
+.mlist .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mlist .ct { font-size: 10.5px; color: var(--fg-3); flex: none; }
 
 /* ---------- body ---------- */
 .body { display: grid; grid-template-columns: 228px 1fr; min-height: 0; }
@@ -161,7 +183,24 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
   border: 1px solid var(--line); color: var(--fg-3); background: var(--panel-2);
 }
 .chip.warn { color: var(--warn); border-color: #4a3a10; background: #1c1706; }
+.chip.on { color: #04201c; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.chip.clear { color: var(--fg-3); border-style: dashed; }
 .chip:hover { filter: brightness(1.25); }
+
+/* Filters sit on their own line so the title row stays about the selection. */
+.fbar {
+  display: flex; align-items: center; gap: 6px; padding: 0 14px; height: 34px;
+  border-bottom: 1px solid var(--line-soft); background: var(--panel); flex: none;
+  overflow-x: auto; scrollbar-width: none;
+}
+.fbar::-webkit-scrollbar { display: none; }
+.fsel {
+  height: 24px; padding: 0 6px; font-size: 11.5px; color: var(--fg-3);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+  outline: 0; cursor: pointer; max-width: 190px;
+}
+.fsel:hover { color: var(--fg); background: #1b1f24; }
+.fsel.on { color: var(--accent); border-color: #2c4f4a; background: #0f1e1c; }
 
 .sortsel { display: flex; align-items: center; gap: 2px; }
 .sortsel select {
@@ -182,12 +221,13 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 .act:hover { color: var(--fg); border-color: #333a44; background: #1b1f24; }
 .act.d:hover { color: var(--danger); border-color: #5c2020; background: #1e0f0f; }
 .act.a:hover { color: var(--accent); border-color: #2c4f4a; background: #0f1e1c; }
+.bar .sel-n { color: var(--accent); }
 
 /* One row = art + two lines + length. Everything else (bitrate, container,
    folder inside a playlist) is either on hover or not worth the ink. */
 .list { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0; }
 .row {
-  display: grid; grid-template-columns: 34px minmax(0, 1fr) 46px;
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) 84px 48px;
   gap: 11px; align-items: center; padding: 0 14px;
   height: var(--row); border-left: 2px solid transparent;
   color: var(--fg-2); font-size: 12.5px; cursor: default;
@@ -195,10 +235,39 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 .row:hover { background: #111417; }
 .row.sel { background: #132523; color: var(--fg); border-left-color: var(--accent); }
 .row.sel:hover { background: #173029; }
+.row.menuon { background: #171b20; }
 .row.playing .t1 { color: var(--accent); }
 .row.del { opacity: 0.42; border-left-color: var(--danger); }
 .row.del .t1 { text-decoration: line-through; }
 .row.dragging { opacity: 0.35; }
+
+/* The column is always 84px wide — the buttons only fade — so nothing under
+   the cursor ever moves, and the pointer stays inside the row that spawned
+   them. */
+.acts {
+  display: flex; gap: 2px; justify-content: flex-end;
+  opacity: 0; pointer-events: none; transition: opacity 0.12s ease;
+}
+.row:hover .acts, .row:focus-within .acts, .row.menuon .acts {
+  opacity: 1; pointer-events: auto;
+}
+.acts button {
+  width: 25px; height: 25px; border-radius: 5px; font-size: 12px; line-height: 1;
+  color: var(--fg-3); border: 1px solid transparent; transition: 0.12s;
+}
+.acts button:hover { background: #242b33; color: var(--fg); border-color: var(--line); }
+.acts button.bad:hover { background: #1e0f0f; color: var(--danger); border-color: #5c2020; }
+.acts button.good:hover { background: #0f1e1c; color: var(--accent); border-color: #2c4f4a; }
+
+/* Art doubles as the play button — the most common action on the most
+   obvious target, with no extra affordance taking up space. */
+.artwrap { position: relative; width: 34px; height: 34px; cursor: pointer; }
+.artplay {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  border-radius: 5px; background: rgba(0, 0, 0, 0.6); color: #fff;
+  font-size: 11px; opacity: 0; transition: opacity 0.12s;
+}
+.artwrap:hover .artplay, .row.playing .artplay { opacity: 1; }
 
 .art {
   width: 34px; height: 34px; border-radius: 5px; object-fit: cover;
@@ -226,6 +295,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
   color: var(--fg-3); vertical-align: 1px; margin-left: 5px;
 }
 .tag.bad { color: var(--warn); border-color: #4a3a10; background: #1c1706; }
+.tag.good { color: var(--accent); border-color: #2c4f4a; background: #0f1e1c; }
 
 .empty { padding: 44px 20px; text-align: center; color: var(--fg-3); font-size: 12.5px; line-height: 1.9; }
 .empty b { color: var(--fg-2); display: block; margin-bottom: 3px; font-size: 13px; }
