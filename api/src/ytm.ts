@@ -1,15 +1,19 @@
 /**
  * Upstream diff against YouTube Music.
  *
- * ytmusicapi's library/liked endpoints are broken server-side, so the Python
- * bridge only ever calls get_playlist(id). Fetching lives in Python; caching,
- * matching and diffing live here.
+ * Unauthenticated by design — see api/py/ytm_bridge.py for why the signed-in
+ * path is unavailable and why it does not matter. Fetching lives in Python;
+ * discovery, name matching, caching and diffing live here.
  */
 import { db, log, now, setMeta } from "./db";
 import { py } from "./py";
 import { norm } from "./tags";
 
-type BridgeStatus = { authed: boolean; error: string | null; known: Record<string, string> };
+type BridgeStatus = { reachable: boolean; reason: string | null; owner: string | null };
+type BridgeDiscover = {
+  channel: string; owner: string | null;
+  playlists: { ytmId: string; title: string }[];
+};
 type BridgeFetch = {
   playlists: {
     name: string; ytmId: string; title: string;
@@ -20,15 +24,104 @@ type BridgeFetch = {
 
 export async function status() {
   const s = await py<BridgeStatus>("ytm_bridge.py", "status", {}, 90_000);
-  const known = db.query<{ n: number }, []>(
-    "SELECT COUNT(*) n FROM ytm_playlists").get()!.n;
+  const c = db.query<{ known: number; linked: number; fetched: number }, []>(
+    `SELECT COUNT(*) known,
+            COUNT(local_playlist_id) linked,
+            COUNT(CASE WHEN fetched_at > 0 THEN 1 END) fetched
+     FROM ytm_playlists`).get()!;
   return {
-    authed: s.authed,
-    error: s.error,
+    // Never call this key `error`: unwrap() on the client treats any `error`
+    // key as a failed request, so a perfectly healthy status with error:null
+    // used to throw and leave the modal stuck on "Checking…" forever.
+    reachable: s.reachable,
+    reason: s.reason,
+    owner: s.owner,
     lastSync: getNum("last_ytm_sync"),
-    playlistsKnown: known,
-    mapped: Object.keys(mapping(s.known)).length,
+    discovered: c.known,
+    linked: c.linked,
+    fetched: c.fetched,
   };
+}
+
+/** Loose enough for “Brostep-Dubstep” vs “Brostep/Dubstep”, strict on letters. */
+const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * Enumerate the owner's public playlists and link them to local ones by name.
+ *
+ * Exact normalised match first. Then a containment match, but only when it is
+ * unambiguous — two upstream playlists called “Haussss” must not race to claim
+ * the same local one, so both are left for the user to pick.
+ */
+export async function discover() {
+  const d = await py<BridgeDiscover>("ytm_bridge.py", "discover", {}, 120_000);
+
+  const locals = db.query<{ id: number; name: string }, []>(
+    "SELECT id,name FROM playlists").all();
+  // localId -> the upstream id already holding it, so re-running discovery
+  // does not report an existing link as a conflict with itself.
+  const heldBy = new Map<number, string>(
+    db.query<{ ytm_id: string; local_playlist_id: number }, []>(
+      "SELECT ytm_id, local_playlist_id FROM ytm_playlists WHERE local_playlist_id IS NOT NULL")
+      .all().map((r) => [r.local_playlist_id, r.ytm_id]));
+
+  const claims = new Map<number, string[]>();   // localId -> ytmIds wanting it
+  const wants = new Map<string, number>();      // ytmId  -> localId
+
+  for (const p of d.playlists) {
+    const k = key(p.title);
+    const exact = locals.filter((l) => key(l.name) === k);
+    const loose = exact.length ? exact
+      : locals.filter((l) => key(l.name).includes(k) || k.includes(key(l.name)));
+    if (loose.length !== 1) continue;
+    const localId = loose[0]!.id;
+    wants.set(p.ytmId, localId);
+    claims.set(localId, [...(claims.get(localId) ?? []), p.ytmId]);
+  }
+
+  const upsert = db.query(
+    `INSERT INTO ytm_playlists(ytm_id,title,count,local_playlist_id,fetched_at)
+     VALUES(?,?,0,?,0) ON CONFLICT(ytm_id) DO UPDATE SET
+       title=excluded.title,
+       local_playlist_id=COALESCE(ytm_playlists.local_playlist_id, excluded.local_playlist_id)`);
+
+  let linked = 0, ambiguous = 0;
+  db.transaction(() => {
+    for (const p of d.playlists) {
+      const localId = wants.get(p.ytmId);
+      const held = localId != null ? heldBy.get(localId) : undefined;
+      const contested = localId != null
+        && (claims.get(localId)!.length > 1 || (held != null && held !== p.ytmId));
+      if (localId != null && contested) ambiguous++;
+      const link = localId != null && !contested ? localId : null;
+      if (link != null) linked++;
+      upsert.run(p.ytmId, p.title, link);
+    }
+  })();
+
+  log("ytm_discover", { channel: d.channel }, `${d.playlists.length} upstream, ${linked} linked`);
+  return {
+    owner: d.owner, channel: d.channel,
+    found: d.playlists.length, linked, ambiguous,
+    unlinkedLocal: locals
+      .filter((l) => ![...wants.values()].includes(l.id) && !heldBy.has(l.id))
+      .map((l) => l.name),
+  };
+}
+
+/** Everything discovered upstream, with whatever it is linked to locally. */
+export function candidates() {
+  return db.query<
+    { ytmId: string; title: string; localPlaylistId: number | null;
+      localName: string | null; count: number; fetchedAt: number }, []
+  >(`SELECT y.ytm_id AS ytmId, y.title, y.local_playlist_id AS localPlaylistId,
+            p.name AS localName, y.count, y.fetched_at AS fetchedAt
+     FROM ytm_playlists y LEFT JOIN playlists p ON p.id = y.local_playlist_id
+     ORDER BY (y.local_playlist_id IS NULL), y.title`).all();
+}
+
+export function unlink(ytmId: string) {
+  db.query("UPDATE ytm_playlists SET local_playlist_id=NULL WHERE ytm_id=?").run(ytmId);
 }
 
 function getNum(key: string) {
@@ -37,9 +130,9 @@ function getNum(key: string) {
   return r ? Number(r.value) : null;
 }
 
-/** Known ids from the bridge, plus anything the user has linked by hand. */
-function mapping(known: Record<string, string> = {}) {
-  const m: Record<string, string> = { ...known };
+/** Local playlist name -> upstream id, for every link that exists. */
+function mapping() {
+  const m: Record<string, string> = {};
   for (const r of db.query<{ name: string; ytm_id: string }, []>(
     `SELECT p.name, y.ytm_id FROM ytm_playlists y
      JOIN playlists p ON p.id = y.local_playlist_id`).all()) {
@@ -56,8 +149,7 @@ export function link(localPlaylistId: number, ytmId: string) {
 }
 
 export async function refresh(names?: string[]) {
-  const s = await py<BridgeStatus>("ytm_bridge.py", "status", {}, 90_000);
-  let targets = mapping(s.known);
+  let targets = mapping();
   if (names?.length) {
     targets = Object.fromEntries(Object.entries(targets).filter(([k]) => names.includes(k)));
   }
@@ -98,7 +190,8 @@ export function diff() {
   for (const y of db.query<
     { ytm_id: string; title: string; local_playlist_id: number | null; fetched_at: number },
     []
-  >("SELECT ytm_id,title,local_playlist_id,fetched_at FROM ytm_playlists ORDER BY title").all()) {
+  >(`SELECT ytm_id,title,local_playlist_id,fetched_at FROM ytm_playlists
+     WHERE fetched_at > 0 ORDER BY title`).all()) {
     const local =
       (y.local_playlist_id
         ? db.query<{ id: number; name: string }, [number]>(

@@ -410,3 +410,23 @@ pre.diff {
   border: 1px solid #4a3a10; background: #1c1706; color: var(--warn);
   border-radius: 8px; margin-bottom: 12px; font-size: 12px;
 }
+
+/* ---------- upstream links ---------- */
+.linkhd {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; margin-bottom: 6px; border-radius: 6px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  font-size: 12px; color: var(--fg-2); text-align: left;
+}
+.linkhd:hover { color: var(--fg); border-color: #333a44; }
+.links {
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px; margin-bottom: 10px; max-height: 260px; overflow-y: auto;
+}
+.links .dl { gap: 8px; }
+.links select {
+  height: 23px; max-width: 200px; font-size: 11.5px; color: var(--fg-2);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 5px; outline: 0; cursor: pointer;
+}
+.links select:hover { color: var(--fg); }

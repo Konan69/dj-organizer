@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
 """YouTube Music bridge.
 
-Stays Python because ytmusicapi implements the browse/auth protocol.
+Stays Python because ytmusicapi implements the browse protocol.
 Called by the Elysia API as a subprocess:
 
-    python3 ytm_bridge.py status
-    python3 ytm_bridge.py fetch  < {"playlists":{"name":"ytmId",...}}
+    python3 ytm_bridge.py discover < {"seed":"PL..."}
+    python3 ytm_bridge.py fetch    < {"playlists":{"name":"ytmId",...}}
 
-NOTE: get_library_playlists() and get_liked_songs() are broken server-side
-(return 0 / raise KeyError on twoColumnBrowseResultsRenderer). Only
-get_playlist(id) works, so callers must supply the playlist ids.
+Deliberately unauthenticated.
+
+The library endpoints (get_library_playlists, get_liked_songs) return 0 rows
+here, and that was long read as an ytmusicapi bug. It is not: the browse comes
+back with a "Sign in" message renderer, i.e. YouTube treats the request as
+signed out. Cookie jars lifted from the desktop app and from a logged-in
+Chrome both failed the same way, so the signed-in path is simply not available
+from this machine.
+
+It is also not needed. Every playlist here is PUBLIC, so get_user() lists them
+all and get_playlist() reads any of them without credentials. Anonymous is the
+correct client for a public browse, and it cannot go stale.
+
+Consequence to respect: a playlist switched to Private disappears from
+discovery and errors on fetch. That is surfaced, never papered over.
 """
 import json
 import sys
 import time
 
-AUTH = "/tmp/ytm-browser.json"
-
-KNOWN = {
-    "BANGERS !!!!": "PL_EXAMPLE_PLAYLIST_ID",
-    "Drum & Bass Bangers": "PL_EXAMPLE_PLAYLIST_ID",
-    "Hardstyle - hardstylleee": "PL_EXAMPLE_PLAYLIST_ID",
-    "OG Grime": "PL_EXAMPLE_PLAYLIST_ID",
-    "Techno": "PL_EXAMPLE_PLAYLIST_ID",
-}
+# Any owned playlist works as a seed; its author is the channel to enumerate.
+SEED = "PL_EXAMPLE_PLAYLIST_ID"   # "Techno"
 
 
 def out(obj):
@@ -34,20 +39,41 @@ def out(obj):
 
 def yt():
     from ytmusicapi import YTMusic
-    return YTMusic(AUTH)
+    return YTMusic()
 
 
-def cmd_status():
-    try:
-        yt().get_playlist(KNOWN["Techno"], limit=1)
-        out({"authed": True, "error": None, "known": KNOWN})
-    except Exception as e:                                    # noqa: BLE001
-        out({"authed": False, "error": f"{type(e).__name__}: {str(e)[:200]}", "known": KNOWN})
+def cmd_discover(payload):
+    """List every public playlist on the channel that owns the seed playlist."""
+    seed = payload.get("seed") or SEED
+    api = yt()
+    p = api.get_playlist(seed, limit=1)
+    author = p.get("author") or {}
+    channel = author.get("id")
+    if not channel:
+        out({"error": f"no channel on seed playlist {seed}"})
+
+    user = api.get_user(channel)
+    section = user.get("playlists") or {}
+    params = section.get("params")
+    items = (api.get_user_playlists(channel, params) if params
+             else (section.get("results") or []))
+
+    out({
+        "channel": channel,
+        "owner": user.get("name") or author.get("name"),
+        "playlists": [
+            {"ytmId": i.get("playlistId"), "title": i.get("title")}
+            for i in items if i.get("playlistId")
+        ],
+    })
 
 
 def cmd_fetch(payload):
-    """payload = {"playlists": {localName: ytmId}}; falls back to KNOWN."""
-    targets = payload.get("playlists") or KNOWN
+    """payload = {"playlists": {localName: ytmId}}"""
+    targets = payload.get("playlists") or {}
+    if not targets:
+        out({"playlists": [], "errors": []})
+
     api = yt()
     results, errors = [], []
     for i, (name, pid) in enumerate(targets.items()):
@@ -74,6 +100,15 @@ def cmd_fetch(payload):
     out({"playlists": results, "errors": errors})
 
 
+def cmd_status():
+    """Can we reach the public browse endpoint at all?"""
+    try:
+        p = yt().get_playlist(SEED, limit=1)
+        out({"reachable": True, "reason": None, "owner": (p.get("author") or {}).get("name")})
+    except Exception as e:                                    # noqa: BLE001
+        out({"reachable": False, "reason": f"{type(e).__name__}: {str(e)[:200]}", "owner": None})
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -81,6 +116,8 @@ def main():
     try:
         if cmd == "status":
             cmd_status()
+        elif cmd == "discover":
+            cmd_discover(payload)
         elif cmd == "fetch":
             cmd_fetch(payload)
         else:

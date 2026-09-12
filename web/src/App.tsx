@@ -706,7 +706,11 @@ export function App() {
         />
       ) : null}
       {modal === "changes" ? <ChangesModal onClose={() => setModal(null)} notify={show} /> : null}
-      {modal === "upstream" ? <UpstreamModal onClose={() => setModal(null)} notify={show} /> : null}
+      {modal === "upstream" ? (
+        <UpstreamModal
+          onClose={() => setModal(null)} notify={show} playlists={state.playlists}
+        />
+      ) : null}
       {modal === "stores" ? <StoresModal onClose={() => setModal(null)} notify={show} /> : null}
       {modal === "ops" ? (
         <OpsModal onClose={() => setModal(null)} notify={show} onChange={() => void load()} />

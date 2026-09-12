@@ -341,6 +341,12 @@ export const app = new Elysia({ prefix: "" })
       // ---- upstream ----
       .get("/ytm/status", () => ytm.status())
       .get("/ytm/diff", () => ytm.diff())
+      .get("/ytm/candidates", () => ytm.candidates())
+      .post("/ytm/discover", () => ytm.discover())
+      .post("/ytm/unlink", ({ body }) => {
+        ytm.unlink(body.ytmId);
+        return { ok: true };
+      }, { body: t.Object({ ytmId: t.String() }) })
       .post("/ytm/refresh", ({ body }) => ytm.refresh(body?.names), {
         body: t.Optional(t.Object({ names: t.Optional(t.Array(t.String())) })),
       })

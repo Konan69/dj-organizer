@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { api, unwrap, type Changes, type Duplicates, type Playlist, type YtmDiff } from "./api";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { api, unwrap, type Changes, type Duplicates, type Playlist, type YtmCandidates,
+  type YtmDiff, type YtmStatus } from "./api";
 import { fmtMb } from "./hooks";
 
 export function Modal({ title, onClose, children, footer }: {
@@ -248,51 +249,69 @@ export function ChangesModal({ onClose, notify }: {
 
 /* ---------------- upstream diff ---------------- */
 
-export function UpstreamModal({ onClose, notify }: {
+export function UpstreamModal({ onClose, notify, playlists }: {
   onClose: () => void;
   notify: (m: string, k?: "ok" | "err") => void;
+  playlists: Playlist[];
 }) {
-  const [status, setStatus] = useState<Awaited<ReturnType<typeof loadStatus>> | null>(null);
+  const [status, setStatus] = useState<YtmStatus | null>(null);
   const [diff, setDiff] = useState<YtmDiff | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [cands, setCands] = useState<YtmCandidates | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [showLinks, setShowLinks] = useState(false);
 
-  async function loadStatus() { return unwrap(api.ytm.status.get()); }
+  const reload = useCallback(async () => {
+    const [s, d, c] = await Promise.all([
+      unwrap(api.ytm.status.get()),
+      unwrap(api.ytm.diff.get()),
+      unwrap(api.ytm.candidates.get()),
+    ]);
+    setStatus(s); setDiff(d); setCands(c);
+    return s;
+  }, []);
 
+  /**
+   * Discovery is cheap, safe and idempotent, so an empty cache resolves itself
+   * on open. Fetching every playlist is neither, so that stays a button.
+   */
   useEffect(() => {
     (async () => {
       try {
-        const [s, d] = await Promise.all([loadStatus(), unwrap(api.ytm.diff.get())]);
-        setStatus(s);
-        setDiff(d);
-      } catch (e) { notify((e as Error).message, "err"); }
+        const s = await reload();
+        if (s.reachable && s.discovered === 0) {
+          setBusy("Finding your playlists…");
+          await unwrap(api.ytm.discover.post());
+          await reload();
+          setBusy(null);
+        }
+      } catch (e) { setBusy(null); notify((e as Error).message, "err"); }
     })();
-  }, [notify]);
+  }, [reload, notify]);
 
-  const refetch = async () => {
-    setBusy(true);
-    try {
-      await unwrap(api.ytm.refresh.post({}));
-      setDiff(await unwrap(api.ytm.diff.get()));
-      setStatus(await loadStatus());
-      notify("Upstream refreshed", "ok");
-    } catch (e) { notify((e as Error).message, "err"); }
-    setBusy(false);
+  const act = async (label: string, fn: () => Promise<unknown>, done: string) => {
+    setBusy(label);
+    try { await fn(); await reload(); notify(done, "ok"); }
+    catch (e) { notify((e as Error).message, "err"); }
+    setBusy(null);
   };
 
   if (!status) {
     return <Modal title="Upstream · YouTube Music" onClose={onClose}><div className="mut">Checking…</div></Modal>;
   }
-  if (!status.authed) {
+  if (!status.reachable) {
     return (
       <Modal title="Upstream · YouTube Music" onClose={onClose}>
         <div className="mut">
-          Not authenticated.<br /><br />
-          <code>{status.error}</code><br /><br />
-          Refresh cookies into <code>/tmp/ytm-browser.json</code>.
+          Cannot reach YouTube Music.<br /><br />
+          <code>{status.reason}</code>
         </div>
       </Modal>
     );
   }
+
+  const unlinked = (cands ?? []).filter((c) => !c.localPlaylistId);
+  const linkedRows = (cands ?? []).filter((c) => c.localPlaylistId);
+  const neverFetched = linkedRows.filter((c) => !c.fetchedAt).length;
 
   return (
     <Modal
@@ -300,18 +319,67 @@ export function UpstreamModal({ onClose, notify }: {
       onClose={onClose}
       footer={
         <>
-          <button className="pill" onClick={refetch} disabled={busy}>
-            {busy ? "Fetching…" : "↻ Refetch"}
-          </button>
+          <button
+            className="pill" disabled={!!busy}
+            onClick={() => act("Fetching…", () => unwrap(api.ytm.refresh.post({})), "Upstream refreshed")}
+          >{busy === "Fetching…" ? "Fetching…" : `↻ Fetch ${status.linked} linked`}</button>
+          <button
+            className="pill" disabled={!!busy}
+            onClick={() => act("Finding…", () => unwrap(api.ytm.discover.post()), "Rescanned your channel")}
+          >⌕ Rediscover</button>
           <span className="mut">
-            {status.mapped} playlists linked
-            {status.lastSync ? ` · last ${new Date(status.lastSync * 1000).toLocaleString()}` : ""}
+            {busy ?? <>
+              {status.owner ? `${status.owner} · ` : ""}
+              {status.discovered} upstream · {status.linked} linked
+              {status.lastSync ? ` · last ${new Date(status.lastSync * 1000).toLocaleString()}` : ""}
+            </>}
           </span>
         </>
       }
     >
+      {/* Nothing here works until a local playlist is paired with an upstream
+          one, so the pairing lives at the top rather than behind a setting. */}
+      <button className="linkhd" onClick={() => setShowLinks((v) => !v)}>
+        {showLinks ? "▾" : "▸"} Links
+        <span className="num">{status.linked} linked</span>
+        {unlinked.length ? <span className="num up">{unlinked.length} upstream unlinked</span> : null}
+        {neverFetched ? <span className="num dn">{neverFetched} never fetched</span> : null}
+      </button>
+
+      {showLinks ? (
+        <div className="links">
+          {(cands ?? []).map((c) => (
+            <div className="dl" key={c.ytmId}>
+              <a
+                className="grow" href={`https://music.youtube.com/playlist?list=${c.ytmId}`}
+                target="_blank" rel="noreferrer"
+              >{c.title}</a>
+              <select
+                value={c.localPlaylistId ?? ""}
+                disabled={!!busy}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) return void act("Unlinking…",
+                    () => unwrap(api.ytm.unlink.post({ ytmId: c.ytmId })), "Unlinked");
+                  void act("Linking…", () => unwrap(api.ytm.link.post({
+                    ytmId: c.ytmId, localPlaylistId: Number(v),
+                  })), `Linked → ${playlists.find((p) => p.id === Number(v))?.name ?? ""}`);
+                }}
+              >
+                <option value="">— not linked —</option>
+                {playlists.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {!diff?.length ? (
-        <div className="mut">No upstream data cached yet — hit Refetch.</div>
+        <div className="mut">
+          {status.linked
+            ? "Linked, but nothing fetched yet — hit Fetch below."
+            : "No playlist is linked yet. Open Links above and pair them up."}
+        </div>
       ) : (
         diff.map((p) => (
           <Group
