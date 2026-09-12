@@ -430,3 +430,9 @@ pre.diff {
   border-radius: 5px; outline: 0; cursor: pointer;
 }
 .links select:hover { color: var(--fg); }
+.mini {
+  height: 21px; padding: 0 7px; font-size: 10.5px; border-radius: 5px;
+  color: var(--fg-3); background: var(--panel-2); border: 1px solid var(--line);
+  white-space: nowrap; flex: none;
+}
+.mini:hover:not(:disabled) { color: var(--accent); border-color: #2c4f4a; background: #0f1e1c; }

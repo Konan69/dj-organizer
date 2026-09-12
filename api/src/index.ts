@@ -347,8 +347,11 @@ export const app = new Elysia({ prefix: "" })
         ytm.unlink(body.ytmId);
         return { ok: true };
       }, { body: t.Object({ ytmId: t.String() }) })
-      .post("/ytm/refresh", ({ body }) => ytm.refresh(body?.names), {
-        body: t.Optional(t.Object({ names: t.Optional(t.Array(t.String())) })),
+      .post("/ytm/refresh", ({ body }) => ytm.refresh(body?.ytmIds), {
+        body: t.Optional(t.Object({ ytmIds: t.Optional(t.Array(t.String())) })),
+      })
+      .post("/ytm/adopt", ({ body }) => ytm.adopt(body.ytmId), {
+        body: t.Object({ ytmId: t.String() }),
       })
       .post("/ytm/link", ({ body }) => {
         ytm.link(body.localPlaylistId, body.ytmId);

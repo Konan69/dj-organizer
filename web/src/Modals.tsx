@@ -354,6 +354,17 @@ export function UpstreamModal({ onClose, notify, playlists }: {
                 className="grow" href={`https://music.youtube.com/playlist?list=${c.ytmId}`}
                 target="_blank" rel="noreferrer"
               >{c.title}</a>
+              {/* An upstream playlist with no local home is a download queue
+                  waiting to exist — one click makes it one. */}
+              {!c.localPlaylistId ? (
+                <button
+                  className="mini" disabled={!!busy}
+                  title={`Create a local playlist called “${c.title}” and link it`}
+                  onClick={() => void act("Creating…",
+                    () => unwrap(api.ytm.adopt.post({ ytmId: c.ytmId })),
+                    `Created “${c.title}”`)}
+                >+ local</button>
+              ) : null}
               <select
                 value={c.localPlaylistId ?? ""}
                 disabled={!!busy}
@@ -383,10 +394,15 @@ export function UpstreamModal({ onClose, notify, playlists }: {
       ) : (
         diff.map((p) => (
           <Group
-            key={p.ytmId}
+            key={p.localPlaylistId}
             head={
               <>
                 <b>{p.playlist}</b>
+                {p.sources.length > 1
+                  ? <span className="num" title={p.sources.map((s) => s.title).join(" + ")}>
+                      {p.sources.length} sources
+                    </span>
+                  : null}
                 <span className="num">{p.matched} matched</span>
                 {p.missingLocally.length
                   ? <span className="num up">{p.missingLocally.length} not downloaded</span> : null}

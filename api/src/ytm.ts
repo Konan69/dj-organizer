@@ -58,25 +58,33 @@ export async function discover() {
 
   const locals = db.query<{ id: number; name: string }, []>(
     "SELECT id,name FROM playlists").all();
-  // localId -> the upstream id already holding it, so re-running discovery
-  // does not report an existing link as a conflict with itself.
-  const heldBy = new Map<number, string>(
-    db.query<{ ytm_id: string; local_playlist_id: number }, []>(
-      "SELECT ytm_id, local_playlist_id FROM ytm_playlists WHERE local_playlist_id IS NOT NULL")
-      .all().map((r) => [r.local_playlist_id, r.ytm_id]));
+  const alreadyLinked = new Set(
+    db.query<{ local_playlist_id: number }, []>(
+      "SELECT local_playlist_id FROM ytm_playlists WHERE local_playlist_id IS NOT NULL")
+      .all().map((r) => r.local_playlist_id));
 
-  const claims = new Map<number, string[]>();   // localId -> ytmIds wanting it
-  const wants = new Map<string, number>();      // ytmId  -> localId
+  // localId -> claimants, split by how strong the evidence is. Two upstream
+  // playlists that normalise to the same name (“techno” and “Techno”, the two
+  // “Haussss”) are one intent expressed twice, so both may link. Containment
+  // is a guess, so it only wins when it is the only claim on that playlist.
+  const exactClaims = new Map<number, string[]>();
+  const looseClaims = new Map<number, string[]>();
+  const wants = new Map<string, number>();
 
   for (const p of d.playlists) {
     const k = key(p.title);
     const exact = locals.filter((l) => key(l.name) === k);
-    const loose = exact.length ? exact
-      : locals.filter((l) => key(l.name).includes(k) || k.includes(key(l.name)));
-    if (loose.length !== 1) continue;
-    const localId = loose[0]!.id;
-    wants.set(p.ytmId, localId);
-    claims.set(localId, [...(claims.get(localId) ?? []), p.ytmId]);
+    const hit = exact.length === 1 ? exact[0]
+      : exact.length ? undefined
+      : (() => {
+          const loose = locals.filter(
+            (l) => key(l.name).includes(k) || k.includes(key(l.name)));
+          return loose.length === 1 ? loose[0] : undefined;
+        })();
+    if (!hit) continue;
+    wants.set(p.ytmId, hit.id);
+    const bucket = exact.length === 1 ? exactClaims : looseClaims;
+    bucket.set(hit.id, [...(bucket.get(hit.id) ?? []), p.ytmId]);
   }
 
   const upsert = db.query(
@@ -89,11 +97,15 @@ export async function discover() {
   db.transaction(() => {
     for (const p of d.playlists) {
       const localId = wants.get(p.ytmId);
-      const held = localId != null ? heldBy.get(localId) : undefined;
-      const contested = localId != null
-        && (claims.get(localId)!.length > 1 || (held != null && held !== p.ytmId));
-      if (localId != null && contested) ambiguous++;
-      const link = localId != null && !contested ? localId : null;
+      let link: number | null = null;
+      if (localId != null) {
+        const isExact = (exactClaims.get(localId) ?? []).includes(p.ytmId);
+        // A loose guess never overrides a name that matched exactly, and never
+        // competes with another loose guess for the same playlist.
+        const ok = isExact || (!exactClaims.has(localId)
+          && (looseClaims.get(localId) ?? []).length === 1);
+        if (ok) link = localId; else ambiguous++;
+      }
       if (link != null) linked++;
       upsert.run(p.ytmId, p.title, link);
     }
@@ -104,7 +116,7 @@ export async function discover() {
     owner: d.owner, channel: d.channel,
     found: d.playlists.length, linked, ambiguous,
     unlinkedLocal: locals
-      .filter((l) => ![...wants.values()].includes(l.id) && !heldBy.has(l.id))
+      .filter((l) => ![...wants.values()].includes(l.id) && !alreadyLinked.has(l.id))
       .map((l) => l.name),
   };
 }
@@ -130,15 +142,30 @@ function getNum(key: string) {
   return r ? Number(r.value) : null;
 }
 
-/** Local playlist name -> upstream id, for every link that exists. */
-function mapping() {
-  const m: Record<string, string> = {};
-  for (const r of db.query<{ name: string; ytm_id: string }, []>(
-    `SELECT p.name, y.ytm_id FROM ytm_playlists y
-     JOIN playlists p ON p.id = y.local_playlist_id`).all()) {
-    m[r.name] = r.ytm_id;
+/**
+ * Create a local playlist from an upstream one and link them.
+ *
+ * An upstream playlist with no local counterpart is a download queue: it has
+ * members and we have none of them, which is exactly what the diff is for.
+ */
+export function adopt(ytmId: string) {
+  const y = db.query<{ title: string; local_playlist_id: number | null }, [string]>(
+    "SELECT title, local_playlist_id FROM ytm_playlists WHERE ytm_id=?").get(ytmId);
+  if (!y) throw new Error(`unknown upstream playlist ${ytmId}`);
+  if (y.local_playlist_id) throw new Error("already linked");
+
+  const name = y.title;
+  if (db.query("SELECT 1 FROM playlists WHERE name=?").get(name)) {
+    throw new Error(`a local playlist named “${name}” already exists — link to it instead`);
   }
-  return m;
+  const sort = db.query<{ s: number }, []>(
+    "SELECT COALESCE(MAX(sort),0) s FROM playlists").get()!.s;
+  const { lastInsertRowid } = db.query(
+    "INSERT INTO playlists(name,is_manual,sort) VALUES(?,0,?)").run(name, sort + 1);
+  const id = Number(lastInsertRowid);
+  link(id, ytmId);
+  log("playlist_create", { name, from: ytmId }, `adopted upstream “${name}”`);
+  return { playlistId: id, name };
 }
 
 export function link(localPlaylistId: number, ytmId: string) {
@@ -148,30 +175,33 @@ export function link(localPlaylistId: number, ytmId: string) {
   ).run(ytmId, localPlaylistId);
 }
 
-export async function refresh(names?: string[]) {
-  let targets = mapping();
-  if (names?.length) {
-    targets = Object.fromEntries(Object.entries(targets).filter(([k]) => names.includes(k)));
-  }
+/**
+ * Fetch every linked upstream playlist.
+ *
+ * Keyed by upstream id, never by local name: several upstream playlists may
+ * feed one local playlist (two “Haussss”, “techno” and “Techno”), and a
+ * name-keyed map would silently drop all but one of them.
+ */
+export async function refresh(ytmIds?: string[]) {
+  const rows = db.query<{ ytm_id: string }, []>(
+    "SELECT ytm_id FROM ytm_playlists WHERE local_playlist_id IS NOT NULL").all();
+  const wanted = rows
+    .map((r) => r.ytm_id)
+    .filter((id) => !ytmIds?.length || ytmIds.includes(id));
+  const targets = Object.fromEntries(wanted.map((id) => [id, id]));
 
   const res = await py<BridgeFetch>("ytm_bridge.py", "fetch", { playlists: targets }, 600_000);
 
   const upsertPl = db.query(
-    `INSERT INTO ytm_playlists(ytm_id,title,count,local_playlist_id,fetched_at)
-     VALUES(?,?,?,?,?) ON CONFLICT(ytm_id) DO UPDATE SET
-       title=excluded.title, count=excluded.count, fetched_at=excluded.fetched_at,
-       local_playlist_id=COALESCE(excluded.local_playlist_id, ytm_playlists.local_playlist_id)`);
+    `UPDATE ytm_playlists SET title=?, count=?, fetched_at=? WHERE ytm_id=?`);
   const clearTracks = db.query("DELETE FROM ytm_tracks WHERE ytm_id=?");
   const addTrack = db.query(
     "INSERT OR REPLACE INTO ytm_tracks(ytm_id,video_id,title,artist,sort) VALUES(?,?,?,?,?)");
-  const findLocal = db.query<{ id: number }, [string]>(
-    "SELECT id FROM playlists WHERE name=?");
 
   const ts = now();
   db.transaction(() => {
     for (const p of res.playlists) {
-      const local = findLocal.get(p.name);
-      upsertPl.run(p.ytmId, p.title, p.tracks.length, local?.id ?? null, ts);
+      upsertPl.run(p.title, p.tracks.length, ts, p.ytmId);
       clearTracks.run(p.ytmId);
       for (const t of p.tracks) addTrack.run(p.ytmId, t.videoId, t.title, t.artist, t.sort);
     }
@@ -180,45 +210,57 @@ export async function refresh(names?: string[]) {
   setMeta("last_ytm_sync", ts);
   log("ytm_refresh", { n: res.playlists.length }, `${res.errors.length} errors`);
   return {
-    refreshed: res.playlists.map((p) => ({ playlist: p.name, count: p.tracks.length })),
+    refreshed: res.playlists.map((p) => ({ playlist: p.title, count: p.tracks.length })),
     errors: res.errors,
   };
 }
 
+/**
+ * One entry per LOCAL playlist, unioning every upstream playlist linked to it.
+ *
+ * Grouping this way is what makes several upstream sources per local playlist
+ * meaningful: “techno” and “Techno” together are the intended set, so a track
+ * in either one counts as present upstream rather than as a conflict.
+ */
 export function diff() {
+  const sources = db.query<
+    { ytm_id: string; title: string; local_playlist_id: number; fetched_at: number;
+      local_name: string }, []
+  >(`SELECT y.ytm_id, y.title, y.local_playlist_id, y.fetched_at, p.name AS local_name
+     FROM ytm_playlists y JOIN playlists p ON p.id = y.local_playlist_id
+     WHERE y.fetched_at > 0 ORDER BY p.name, y.title`).all();
+
+  const byLocal = new Map<number, typeof sources>();
+  for (const s of sources) {
+    const list = byLocal.get(s.local_playlist_id);
+    if (list) list.push(s); else byLocal.set(s.local_playlist_id, [s]);
+  }
+
+  const upQuery = db.query<
+    { video_id: string; title: string | null; artist: string | null }, [string]
+  >("SELECT video_id,title,artist FROM ytm_tracks WHERE ytm_id=? ORDER BY sort");
+  const localQuery = db.query<
+    { id: number; title: string | null; artist: string | null;
+      video_id: string | null; filename: string }, [number]
+  >(`SELECT t.id,t.title,t.artist,t.video_id,t.filename FROM memberships m
+     JOIN tracks t ON t.id=m.track_id
+     WHERE m.playlist_id=? AND t.missing=0`);
+
   const out = [];
-  for (const y of db.query<
-    { ytm_id: string; title: string; local_playlist_id: number | null; fetched_at: number },
-    []
-  >(`SELECT ytm_id,title,local_playlist_id,fetched_at FROM ytm_playlists
-     WHERE fetched_at > 0 ORDER BY title`).all()) {
-    const local =
-      (y.local_playlist_id
-        ? db.query<{ id: number; name: string }, [number]>(
-            "SELECT id,name FROM playlists WHERE id=?").get(y.local_playlist_id)
-        : null) ??
-      db.query<{ id: number; name: string }, [string]>(
-        "SELECT id,name FROM playlists WHERE name=?").get(y.title);
+  for (const [localId, srcs] of byLocal) {
+    // Union upstream, deduped by video id — overlapping sources are common.
+    const up = new Map<string, { video_id: string; title: string | null; artist: string | null }>();
+    for (const s of srcs) for (const r of upQuery.all(s.ytm_id)) up.set(r.video_id, r);
+    const upList = [...up.values()];
 
-    const up = db.query<
-      { video_id: string; title: string | null; artist: string | null }, [string]
-    >("SELECT video_id,title,artist FROM ytm_tracks WHERE ytm_id=? ORDER BY sort").all(y.ytm_id);
+    const localTracks = localQuery.all(localId);
 
-    const localTracks = local
-      ? db.query<
-          { id: number; title: string | null; artist: string | null;
-            video_id: string | null; filename: string }, [number]
-        >(`SELECT t.id,t.title,t.artist,t.video_id,t.filename FROM memberships m
-           JOIN tracks t ON t.id=m.track_id
-           WHERE m.playlist_id=? AND t.missing=0`).all(local.id)
-      : [];
-
-    const upVids = new Set(up.map((r) => r.video_id));
-    const upKeys = new Set(up.map((r) => norm(`${r.artist} ${r.title}`)));
+    const upVids = new Set(upList.map((r) => r.video_id));
+    const upKeys = new Set(upList.map((r) => norm(`${r.artist} ${r.title}`)));
     const locVids = new Set(localTracks.map((r) => r.video_id).filter(Boolean) as string[]);
     const locKeys = new Set(localTracks.map((r) => norm(`${r.artist} ${r.title}`)));
 
-    const missingLocally = up
+    const missingLocally = upList
       .filter((r) => !locVids.has(r.video_id) && !locKeys.has(norm(`${r.artist} ${r.title}`)))
       .map((r) => ({
         videoId: r.video_id, title: r.title, artist: r.artist,
@@ -231,16 +273,16 @@ export function diff() {
       .map((r) => ({ trackId: r.id, title: r.title, artist: r.artist, filename: r.filename }));
 
     out.push({
-      playlist: local?.name ?? y.title,
-      ytmId: y.ytm_id,
-      localPlaylistId: local?.id ?? null,
-      ytmCount: up.length,
+      playlist: srcs[0]!.local_name,
+      localPlaylistId: localId,
+      sources: srcs.map((s) => ({ ytmId: s.ytm_id, title: s.title })),
+      ytmCount: upList.length,
       localCount: localTracks.length,
       matched: localTracks.length - extraLocally.length,
       missingLocally,
       extraLocally,
-      fetchedAt: y.fetched_at,
+      fetchedAt: Math.max(...srcs.map((s) => s.fetched_at)),
     });
   }
-  return out;
+  return out.sort((a, b) => a.playlist.localeCompare(b.playlist));
 }
