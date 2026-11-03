@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import struct
 import sys
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from pyrekordbox.anlz.file import XOR_MASK
 
-SHARE = Path("/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox/share").resolve()
+SHARE = (Path(os.environ.get("DJ_REKORDBOX_DIR") or "~/AppData/Roaming/Pioneer/rekordbox").expanduser() / "share").resolve()
 USBANLZ = (SHARE / "PIONEER" / "USBANLZ").resolve()
 
 

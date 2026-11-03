@@ -1,19 +1,32 @@
 import { readdirSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 /** WSL sees the Windows C: drive here; rekordbox paths use the same mapping. */
 export const MNT_ROOT = "/mnt/c";
 export const WIN_ROOT = "C:";
 
-export const LIB = "/mnt/c/Users/you/Music/tracks";
+const env = (name: string) => process.env[name]?.trim() || undefined;
+
+export const LIB = resolve(env("DJ_LIBRARY_ROOT") ?? join(homedir(), "Music", "tracks"));
 // rekordbox stays read-only. download.ts is the sole LIB writer and may only
 // add files; every other use exists to scan and diff external state.
-export const RBX_DB = "/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox/master.db";
-export const BACKUP_DIR = "/mnt/c/Users/you/.dl";
+export const RBX_DIR = resolve(env("DJ_REKORDBOX_DIR") ?? join(homedir(), "AppData", "Roaming", "Pioneer", "rekordbox"));
+export const RBX_DB = join(RBX_DIR, "master.db");
+export const RBX_SHARE = join(RBX_DIR, "share");
+
+/** Comma-separated playlist names from the environment; empty when unset. */
+const envList = (name: string) => (env(name) ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+/** Hand-curated playlists: imported as manual, and dedupe never writes into them. */
+export const MANUAL_PLAYLISTS = envList("DJ_MANUAL_PLAYLISTS");
+/** Local playlists the periodic sync never pulls or stages. */
+export const SYNC_EXCLUDED_PLAYLISTS = envList("DJ_SYNC_EXCLUDED_PLAYLISTS");
+/** User-curated or deliberately capped playlists that never receive automatic memberships. */
+export const AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS = envList("DJ_AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS");
 
 export const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const TEST_DATA = process.env.NODE_ENV === "test" ? process.env.DJ_ORGANIZER_TEST_DATA : undefined;
-export const DATA = TEST_DATA || join(ROOT, "data");
+export const DATA = TEST_DATA || resolve(env("DJ_DATA_DIR") ?? join(ROOT, "data"));
 export const DB_PATH = join(DATA, "library.db");
 export const PY_DIR = join(ROOT, "api", "py");
 export const WEB_DIST = join(ROOT, "web", "dist");

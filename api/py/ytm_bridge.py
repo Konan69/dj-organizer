@@ -24,14 +24,15 @@ Consequence to respect: a playlist switched to Private disappears from
 discovery and errors on fetch. That is surfaced, never papered over.
 """
 import json
+import os
 import random
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-# Any owned playlist works as a seed; its author is the channel to enumerate.
-SEED = "PL_EXAMPLE_PLAYLIST_ID"   # "Techno"
+# Any owned public playlist works as a seed; its author is the channel to enumerate.
+SEED = os.environ.get("DJ_YTM_SEED_PLAYLIST", "").strip()
 
 
 def out(obj):
@@ -48,6 +49,8 @@ def yt():
 def cmd_discover(payload):
     """List every public playlist on the channel that owns the seed playlist."""
     seed = payload.get("seed") or SEED
+    if not seed:
+        out({"error": "set DJ_YTM_SEED_PLAYLIST to one of your public YouTube Music playlist ids"})
     api = yt()
     p = api.get_playlist(seed, limit=1)
     author = p.get("author") or {}
@@ -150,6 +153,8 @@ def cmd_fetch(payload):
 
 def cmd_status():
     """Can we reach the public browse endpoint at all?"""
+    if not SEED:
+        out({"reachable": False, "reason": "DJ_YTM_SEED_PLAYLIST is not set", "owner": None})
     try:
         p = yt().get_playlist(SEED, limit=1)
         out({"reachable": True, "reason": None, "owner": (p.get("author") or {}).get("name")})

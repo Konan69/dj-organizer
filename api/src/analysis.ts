@@ -2,10 +2,10 @@ import { statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { db } from "./db";
 import { py } from "./py";
+import { RBX_SHARE as SHARE } from "./paths";
 import { getNativeAnalysisTrack } from "./suggestions";
 import { summarizeAnalysis, type RawAnalysis } from "./analysis-summary";
 
-const SHARE = "/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox/share";
 const ROOT = join(SHARE, "PIONEER/USBANLZ");
 const cache = new Map<string, { value: RawAnalysis; expires: number }>();
 const pending = new Map<string, Promise<RawAnalysis>>();

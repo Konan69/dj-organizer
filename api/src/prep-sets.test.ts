@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const testData = mkdtempSync(join(tmpdir(), "dj-organizer-sets-"));
-const testAudio = mkdtempSync("/mnt/c/Users/you/.dj-organizer-sets-");
+const testAudio = mkdtempSync(join(process.env.DJ_TEST_WIN_DIR || "/mnt/c/Users/Public", ".dj-organizer-sets-"));
 const isolated = process.env.DJ_ORGANIZER_NAMED_SET_CHILD === "1";
 let db!: typeof import("./db")["db"];
 let app!: typeof import("./index")["app"];

@@ -3,10 +3,10 @@ import { extname, isAbsolute, relative, resolve } from "node:path";
 import { db, markDirty, now } from "./db";
 import { scan } from "./library";
 import * as ops from "./ops";
-import { existingDirectoryCase, LIB, pathKey } from "./paths";
+import { DATA, existingDirectoryCase, LIB, pathKey } from "./paths";
 import * as ytm from "./ytm";
 
-export const YT_DLP = "/home/you/.local/bin/yt-dlp";
+export const YT_DLP = process.env.DJ_YTDLP?.trim() || "yt-dlp";
 const DELAY_MS = 1_000;
 const MAX_JOBS = 50;
 
@@ -90,14 +90,14 @@ function jsonLine<T>(output: string): T {
 // YouTube now gates some formats behind a JS challenge. yt-dlp only enables
 // deno by default, which isn't installed, so those downloads fail outright with
 // "No supported JavaScript runtime could be found". node solves the same
-// challenge - pinned by absolute path because the vp shim shadows `node` on PATH.
-export const NODE = "/home/you/.local/real-node/bin/node";
+// challenge. Set DJ_NODE when another `node` shim shadows the real one on PATH.
+export const NODE = process.env.DJ_NODE?.trim() || "node";
 
 // A signed-in Premium session unlocks format 141 (256k AAC); without it YouTube
-// serves 140 (128k). The jar comes from Helium (scripts/refresh-cookies.ts); a
-// missing jar is a setup fault, so fail rather than quietly download at 128k.
+// serves 140 (128k). Export the jar from your own signed-in browser; a missing
+// jar is a setup fault, so fail rather than quietly download at 128k.
 // The PO token comes from the bgutil server on :4416 via the yt-dlp plugin.
-export const COOKIES = resolve(import.meta.dir, "../../data/cookies/ytm-premium.txt");
+export const COOKIES = resolve(process.env.DJ_YTM_COOKIES?.trim() || resolve(DATA, "cookies/ytm-premium.txt"));
 
 function cookieArgs() {
   if (!existsSync(COOKIES)) throw new Error(`YouTube Premium cookies missing: ${COOKIES}`);

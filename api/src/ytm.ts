@@ -8,6 +8,7 @@
  */
 import { db, log, markDirty, now, setMeta } from "./db";
 import * as ops from "./ops";
+import { AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS, SYNC_EXCLUDED_PLAYLISTS } from "./paths";
 import { py } from "./py";
 import { fetchPlaylist } from "../../worker/src/ytm";
 import { norm } from "./tags";
@@ -41,17 +42,8 @@ export type StagedRow = {
   stagedAt: number | null;
 };
 
-/** User-curated or deliberately capped playlists must never receive automatic memberships. */
-/** Local playlists the periodic sync never pulls or stages. */
-export const SYNC_EXCLUDED_PLAYLISTS = ["Chill house", "Dubstep"] as const;
-const syncExcludedSql = SYNC_EXCLUDED_PLAYLISTS.map((n) => `'${n}'`).join(",");
-
-export const AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS = [
-  "BANGERS !!!!",
-  "Chill house",
-  "Dubstep",
-  "OG Grime",
-] as const;
+export { AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS, SYNC_EXCLUDED_PLAYLISTS };
+const syncExcludedSql = SYNC_EXCLUDED_PLAYLISTS.map((n) => `'${n.replaceAll("'", "''")}'`).join(",");
 
 export async function status() {
   const s = await py<BridgeStatus>("ytm_bridge.py", "status", {}, 90_000);
@@ -81,7 +73,7 @@ const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
  * Enumerate the owner's public playlists and link them to local ones by name.
  *
  * Exact normalised match first. Then a containment match, but only when it is
- * unambiguous — two upstream playlists called “Haussss” must not race to claim
+ * unambiguous — two upstream playlists called “House” must not race to claim
  * the same local one, so both are left for the user to pick.
  */
 export async function discover() {
@@ -96,7 +88,7 @@ export async function discover() {
 
   // localId -> claimants, split by how strong the evidence is. Two upstream
   // playlists that normalise to the same name (“techno” and “Techno”, the two
-  // “Haussss”) are one intent expressed twice, so both may link. Containment
+  // “House”) are one intent expressed twice, so both may link. Containment
   // is a guess, so it only wins when it is the only claim on that playlist.
   const exactClaims = new Map<number, string[]>();
   const looseClaims = new Map<number, string[]>();
@@ -494,7 +486,7 @@ export function link(localPlaylistId: number, ytmId: string) {
  * link state; includeUnlinked is opt-in because public playlists can be huge.
  *
  * Keyed by upstream id, never by local name: several upstream playlists may
- * feed one local playlist (two “Haussss”, “techno” and “Techno”), and a
+ * feed one local playlist (two “House”, “techno” and “Techno”), and a
  * name-keyed map would silently drop all but one of them.
  */
 export async function refresh(
@@ -520,7 +512,7 @@ export async function refresh(
 
 /**
  * Ingest the dj-sync Worker's snapshot of the linked playlists (DJ_SYNC_URL,
- * DJ_SYNC_TOKEN from data/sync.env). The daemon calls this instead of reading
+ * DJ_SYNC_TOKEN from the environment or data/sync.env) instead of reading
  * YouTube from the PC.
  */
 export async function pull() {

@@ -20,7 +20,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 
-RBX_DB = "/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox/master.db"
+RBX_DB = os.path.join(os.path.abspath(os.path.expanduser(os.environ.get("DJ_REKORDBOX_DIR") or "~/AppData/Roaming/Pioneer/rekordbox")), "master.db")
 
 
 def out(obj):

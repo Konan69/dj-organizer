@@ -11,7 +11,7 @@
  * applied — by hand for now.
  */
 import { db, log, now } from "./db";
-import { pathKey } from "./paths";
+import { LIB, pathKey } from "./paths";
 import { latest, type Observation, type StoreName } from "./stores";
 
 export type OpKind =
@@ -295,7 +295,7 @@ export function plan(store: StoreName, obs?: Observation | null): {
 /** The plan as text — the thing to work through by hand. */
 export function planText(store: StoreName) {
   const p = plan(store);
-  const rel = (s?: string) => (s ?? "").replace("/mnt/c/Users/you/Music/tracks/", "");
+  const rel = (s?: string) => (s ?? "").replace(`${LIB}/`, "");
   const L: string[] = [
     `# dj-organizer — replay plan for ${store}`,
     `# generated ${new Date().toISOString()}`,

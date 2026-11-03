@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 // Select an isolated database before application modules load. No user DB or
 // music scan participates in this suite.
 const testData = mkdtempSync(join(tmpdir(), "dj-organizer-prep-"));
-const testAudio = mkdtempSync("/mnt/c/Users/you/.dj-organizer-test-");
+const testAudio = mkdtempSync(join(process.env.DJ_TEST_WIN_DIR || "/mnt/c/Users/Public", ".dj-organizer-test-"));
 process.env.NODE_ENV = "test";
 process.env.DJ_ORGANIZER_TEST_DATA = testData;
 const [{ db }, { app }] = await Promise.all([import("./db"), import("./index")]);

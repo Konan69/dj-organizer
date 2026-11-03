@@ -275,7 +275,7 @@ export function ChangesModal({ onClose, notify, onApplied }: {
     finally { setApplying(false); }
   };
 
-  const rel = (p: string) => p.replace("/mnt/c/Users/you/Music/tracks/", "");
+  const rel = (p: string) => (data ? p.replace(`${data.lib}/`, "") : p);
 
   if (!data) return <Modal title="Changes to apply" onClose={onClose}><Wait /></Modal>;
 

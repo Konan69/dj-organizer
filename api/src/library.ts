@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { db, log, markDirty, now, setMeta } from "./db";
 import { contentHash } from "./identity";
-import { LIB, pathKey } from "./paths";
+import { LIB, MANUAL_PLAYLISTS, pathKey } from "./paths";
 import { observeRekordbox, record as recordObservation } from "./stores";
 import { fromFilename, read } from "./tags";
 
@@ -135,7 +135,7 @@ export async function bootstrap() {
     let made = 0, linked = 0, unresolved = 0, sort = 0;
     const ts = now();
     for (const [name, paths] of Object.entries(observation.groups)) {
-      const pid = mkPl.get(name, ++sort, name.trim() === "BANGERS !!!!" ? 1 : 0, ts)!.id;
+      const pid = mkPl.get(name, ++sort, MANUAL_PLAYLISTS.includes(name.trim()) ? 1 : 0, ts)!.id;
       made++;
       paths.forEach((p, i) => {
         const tid = byPath.get(pathKey(p));

@@ -26,12 +26,13 @@ import urllib.request
 import sqlalchemy as sa
 from pyrekordbox import Rekordbox6Database
 
-RB = "/mnt/c/Users/you/AppData/Roaming/Pioneer/rekordbox"
+RB = os.path.abspath(os.path.expanduser(os.environ.get("DJ_REKORDBOX_DIR") or "~/AppData/Roaming/Pioneer/rekordbox"))
 DB = f"{RB}/master.db"
 API = "http://127.0.0.1:8765/api"
 # {wsl path: comment} - DJ notes written to rekordbox's Comment field on import,
 # only where the track has no comment yet, so an edit made in rekordbox wins.
-COMMENTS_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "rekordbox-comments.json")
+DATA = os.environ.get("DJ_DATA_DIR") or os.path.join(os.path.dirname(__file__), "..", "data")
+COMMENTS_FILE = os.path.join(DATA, "rekordbox-comments.json")
 COMMENTS = json.load(open(COMMENTS_FILE)) if os.path.exists(COMMENTS_FILE) else {}
 
 parser = argparse.ArgumentParser()
@@ -138,7 +139,7 @@ if not adds and not edits and not removes and not pl_ops and not trash:
     sys.exit(0)
 
 # ---- backup ----------------------------------------------------------------
-bk = f"/mnt/c/Users/you/.dl/rbx-apply-backup-{time.strftime('%Y%m%d-%H%M%S')}"
+bk = os.path.join(os.environ.get("DJ_BACKUP_DIR") or os.path.join(DATA, "backups"), f"rbx-apply-backup-{time.strftime('%Y%m%d-%H%M%S')}")
 os.makedirs(bk, exist_ok=True)
 for f in ("master.db", "master.db-wal", "master.db-shm", "masterPlaylists6.xml"):
     if os.path.exists(f"{RB}/{f}"):

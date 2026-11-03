@@ -6,6 +6,7 @@
  * baseline, nothing more.
  */
 import { db } from "./db";
+import { LIB } from "./paths";
 import { pathKey } from "./paths";
 import { latest } from "./stores";
 
@@ -135,6 +136,7 @@ export function compute() {
      FROM pending_deletes p JOIN tracks t ON t.id=p.track_id`).all();
 
   return {
+    lib: LIB,
     playlists: { created, deleted, renamed, modified },
     deletes,
     summary: {
@@ -158,7 +160,7 @@ export function compute() {
 export function asText() {
   const c = compute();
   const L: string[] = [];
-  const rel = (p: string) => p.replace("/mnt/c/Users/you/Music/tracks/", "");
+  const rel = (p: string) => p.replace(`${LIB}/`, "");
 
   L.push("# dj-organizer changeset");
   L.push(`# generated ${new Date().toISOString()}`);

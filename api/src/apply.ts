@@ -7,7 +7,7 @@
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../..");
-const RBX_EXE = String.raw`C:\Program Files\rekordbox\rekordbox 7.2.14\rekordbox.exe`;
+const RBX_EXE = process.env.DJ_REKORDBOX_EXE?.trim() || String.raw`C:\Program Files\rekordbox\rekordbox 7.2.14\rekordbox.exe`;
 
 async function rekordboxRunning() {
   const out = await new Response(Bun.spawn(["tasklist.exe", "/FI", "IMAGENAME eq rekordbox.exe", "/NH"]).stdout).text();

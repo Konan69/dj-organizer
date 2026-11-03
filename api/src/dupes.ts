@@ -38,7 +38,7 @@ export type DupGroup = {
 /**
  * Lower sorts first. A copy that sits in a manually curated playlist always
  * wins, so resolving a duplicate can never add a track *into* one of those —
- * BANGERS !!!! is hand-curated and nothing automatic may change it. After that:
+ * a hand-curated playlist must not change automatically. After that:
  * prefer a DJ-readable container, then higher bitrate, then the bigger file.
  */
 const score = (t: DupTrack, manual: Set<number>): [number, number, number, number] => [
