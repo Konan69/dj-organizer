@@ -5,7 +5,7 @@ Stays Python because ytmusicapi implements the browse protocol.
 Called by the Elysia API as a subprocess:
 
     python3 ytm_bridge.py discover < {"seed":"PL..."}
-    python3 ytm_bridge.py fetch    < {"playlists":{"name":"ytmId",...}}
+    python3 ytm_bridge.py fetch    < {"playlists":{"ytmId":"ytmId",...}}
 
 Deliberately unauthenticated.
 
@@ -24,8 +24,11 @@ Consequence to respect: a playlist switched to Private disappears from
 discovery and errors on fetch. That is surfaced, never papered over.
 """
 import json
+import random
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Any owned playlist works as a seed; its author is the channel to enumerate.
 SEED = "PL_EXAMPLE_PLAYLIST_ID"   # "Techno"
@@ -69,21 +72,34 @@ def cmd_discover(payload):
 
 
 def cmd_fetch(payload):
-    """payload = {"playlists": {localName: ytmId}}"""
+    """payload = {"playlists": {ytmId: ytmId}, "concurrency": int}
+
+    Fetching is shaped around one fact: get_playlist() returns the first page
+    (~200 tracks) no matter how small `limit` is, and only pages beyond that
+    cost extra round trips. So every playlist starts with one cheap call:
+
+      * first page already holds the whole playlist -> done, 1 request
+      * otherwise -> paginate fully
+
+    A stable reported count does not prove stable membership. Always paginate
+    larger playlists so replacements and removals appear on normal refresh.
+    """
     targets = payload.get("playlists") or {}
     if not targets:
         out({"playlists": [], "errors": []})
 
-    api = yt()
-    results, errors = [], []
-    for i, (name, pid) in enumerate(targets.items()):
-        if i:
-            time.sleep(1)                                     # be polite to the endpoint
-        try:
-            p = api.get_playlist(pid, limit=None)
-        except Exception as e:                                # noqa: BLE001
-            errors.append({"playlist": name, "error": f"{type(e).__name__}: {str(e)[:160]}"})
-            continue
+    try:
+        concurrency = int(payload.get("concurrency", 6))
+    except (TypeError, ValueError):
+        concurrency = 6
+    concurrency = max(1, min(8, concurrency))
+
+    # YTMusic wraps a requests.Session, which must not be shared by workers.
+    # The thread-local creates one client per worker and reuses it for that
+    # worker's playlists.
+    worker_state = threading.local()
+
+    def collect(p):
         tracks = []
         for j, t in enumerate(p.get("tracks") or []):
             vid = t.get("videoId")
@@ -95,8 +111,40 @@ def cmd_fetch(payload):
                 "artist": ", ".join(a.get("name", "") for a in (t.get("artists") or [])),
                 "sort": j,
             })
-        results.append({"name": name, "ytmId": pid,
-                        "title": p.get("title") or name, "tracks": tracks})
+        return tracks
+
+    def fetch_one(index, name, pid):
+        try:
+            time.sleep(random.uniform(0.2, 0.4))             # per-thread politeness
+            api = getattr(worker_state, "api", None)
+            if api is None:
+                api = yt()
+                worker_state.api = api
+
+            probe = api.get_playlist(pid, limit=1)
+            reported = probe.get("trackCount")
+            first = collect(probe)
+            title = probe.get("title") or name
+
+            complete = reported is not None and len(first) >= int(reported)
+            tracks = first if complete else collect(api.get_playlist(pid, limit=None))
+            return index, {"name": name, "ytmId": pid, "title": title,
+                           "trackCount": reported, "tracks": tracks}, None
+        except Exception as e:                                # noqa: BLE001
+            return index, None, {"playlist": name, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+
+    results, errors = [], []
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(fetch_one, i, name, pid)
+                   for i, (name, pid) in enumerate(targets.items())]
+        # Futures are consumed in submission order so the output stays
+        # deterministic even while requests complete concurrently.
+        for future in futures:
+            _, result, error = future.result()
+            if error:
+                errors.append(error)
+            else:
+                results.append(result)
     out({"playlists": results, "errors": errors})
 
 

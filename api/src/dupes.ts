@@ -2,7 +2,7 @@
  * Duplicate detection.
  *
  *   twin — same folder + same stem, different container (.webm beside .m4a).
- *          The non-m4a copy is dead weight: Serato and rekordbox can't read it.
+ *          The non-m4a copy is dead weight: rekordbox can't read it.
  *   same — the same YouTube video id indexed at more than one path. Keeping one
  *          file and letting playlist membership do the rest beats two copies.
  *

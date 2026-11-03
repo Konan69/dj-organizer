@@ -14,16 +14,24 @@ export function useToast() {
   const show = useCallback((msg: string, kind: ToastKind = "") => {
     setToast({ msg, kind });
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setToast(null), 4200);
+    // An error may be the only word on what went wrong, so it stays until dismissed.
+    if (kind !== "err") timer.current = setTimeout(() => setToast(null), 4200);
+  }, []);
+
+  const dismiss = useCallback(() => {
+    clearTimeout(timer.current);
+    setToast(null);
   }, []);
 
   useEffect(() => () => clearTimeout(timer.current), []);
-  return { toast, show };
+  return { toast, show, dismiss };
 }
 
 /** Audio element driven imperatively; React only mirrors its state. */
 export function usePlayer() {
   const ref = useRef<HTMLAudioElement | null>(null);
+  const activeId = useRef<number | null>(null);
+  const pendingSeek = useRef<number | null>(null);
   const [playingId, setPlayingId] = useState<number | null>(null);
   const [paused, setPaused] = useState(true);
   const [time, setTime] = useState(0);
@@ -40,24 +48,56 @@ export function usePlayer() {
     const onTime = () => { setTime(a.currentTime); setDuration(a.duration || 0); };
     const onPlay = () => setPaused(false);
     const onPause = () => setPaused(true);
+    const onMetadata = () => {
+      if (pendingSeek.current === null || !Number.isFinite(a.duration)) return;
+      a.currentTime = Math.min(pendingSeek.current, Math.max(0, a.duration - 0.01));
+      pendingSeek.current = null;
+      onTime();
+    };
     a.addEventListener("timeupdate", onTime);
     a.addEventListener("durationchange", onTime);
     a.addEventListener("play", onPlay);
     a.addEventListener("pause", onPause);
+    a.addEventListener("loadedmetadata", onMetadata);
     return () => {
       a.removeEventListener("timeupdate", onTime);
       a.removeEventListener("durationchange", onTime);
       a.removeEventListener("play", onPlay);
       a.removeEventListener("pause", onPause);
+      a.removeEventListener("loadedmetadata", onMetadata);
+      a.pause();
     };
   }, []);
 
   const play = useCallback((id: number) => {
     const a = ref.current;
     if (!a) return;
+    activeId.current = id;
+    pendingSeek.current = null;
     a.src = `/api/audio/${id}`;
+    setTime(0); setDuration(0);
     void a.play().catch(() => {});
     setPlayingId(id);
+  }, []);
+
+  const playAt = useCallback((id: number, seconds: number) => {
+    const a = ref.current;
+    if (!a || !Number.isFinite(seconds)) return;
+    const target = Math.max(0, seconds);
+    if (activeId.current === id && a.readyState >= 1 && Number.isFinite(a.duration)) {
+      pendingSeek.current = null;
+      a.currentTime = Math.min(target, Math.max(0, a.duration - 0.01));
+      setTime(a.currentTime);
+    } else {
+      pendingSeek.current = target;
+      if (activeId.current !== id) {
+        activeId.current = id;
+        a.src = `/api/audio/${id}`;
+        setTime(0); setDuration(0);
+      }
+    }
+    setPlayingId(id);
+    void a.play().catch(() => {});
   }, []);
 
   const toggle = useCallback(() => {
@@ -81,7 +121,7 @@ export function usePlayer() {
     a.onended = cb;
   }, []);
 
-  return { playingId, paused, time, duration, play, toggle, seek, setVolume, onEnded };
+  return { playingId, paused, time, duration, play, playAt, toggle, seek, setVolume, onEnded };
 }
 
 /** Row selection with click / ctrl-click / shift-range over an ordered list. */

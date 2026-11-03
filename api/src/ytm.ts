@@ -2,11 +2,14 @@
  * Upstream diff against YouTube Music.
  *
  * Unauthenticated by design — see api/py/ytm_bridge.py for why the signed-in
- * path is unavailable and why it does not matter. Fetching lives in Python;
- * discovery, name matching, caching and diffing live here.
+ * path is unavailable and why it does not matter. Playlist reads use the
+ * innertube reader shared with the dj-sync Worker (worker/src/ytm.ts); channel
+ * discovery still goes through Python. Name matching, caching and diffing live here.
  */
-import { db, log, now, setMeta } from "./db";
+import { db, log, markDirty, now, setMeta } from "./db";
+import * as ops from "./ops";
 import { py } from "./py";
+import { fetchPlaylist } from "../../worker/src/ytm";
 import { norm } from "./tags";
 
 type BridgeStatus = { reachable: boolean; reason: string | null; owner: string | null };
@@ -17,10 +20,38 @@ type BridgeDiscover = {
 type BridgeFetch = {
   playlists: {
     name: string; ytmId: string; title: string;
-    tracks: { videoId: string; title: string | null; artist: string; sort: number }[];
+    /** YouTube's own count, which runs above `tracks.length` (dropped entries). */
+    trackCount: number | null;
+    tracks: { videoId: string; title: string | null; artist: string; sort: number;
+      unavailable?: boolean }[];
   }[];
   errors: { playlist: string; error: string }[];
 };
+
+export type StagedStatus = "pending" | "approved" | "rejected" | "downloaded";
+
+export type StagedRow = {
+  videoId: string;
+  ytmId: string | null;
+  localPlaylist: string;
+  title: string | null;
+  artist: string | null;
+  status: StagedStatus;
+  flags: string;
+  stagedAt: number | null;
+};
+
+/** User-curated or deliberately capped playlists must never receive automatic memberships. */
+/** Local playlists the periodic sync never pulls or stages. */
+export const SYNC_EXCLUDED_PLAYLISTS = ["Chill house", "Dubstep"] as const;
+const syncExcludedSql = SYNC_EXCLUDED_PLAYLISTS.map((n) => `'${n}'`).join(",");
+
+export const AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS = [
+  "BANGERS !!!!",
+  "Chill house",
+  "Dubstep",
+  "OG Grime",
+] as const;
 
 export async function status() {
   const s = await py<BridgeStatus>("ytm_bridge.py", "status", {}, 90_000);
@@ -132,6 +163,289 @@ export function candidates() {
      ORDER BY (y.local_playlist_id IS NULL), y.title`).all();
 }
 
+const junkTitle = /rain sounds|YOUR POPULAR|^\s*$/i;
+
+/** Stage fetched, linked upstream tracks for per-track review before download. */
+export function stage() {
+  type Candidate = {
+    video_id: string; ytm_id: string; local_playlist: string;
+    title: string | null; artist: string | null; source_count: number; unavailable: number;
+  };
+  const rows = db.query<Candidate, []>(
+    `SELECT t.video_id,t.ytm_id,p.name AS local_playlist,t.title,t.artist,
+            y.count AS source_count, COALESCE(t.unavailable,0) AS unavailable
+     FROM ytm_playlists y
+     JOIN playlists p ON p.id=y.local_playlist_id
+     JOIN ytm_tracks t ON t.ytm_id=y.ytm_id
+     WHERE t.video_id IS NOT NULL
+       AND p.name NOT IN (${syncExcludedSql})
+       AND NOT EXISTS (
+         SELECT 1 FROM tracks l
+         WHERE l.missing=0 AND l.video_id IS NOT NULL AND l.video_id=t.video_id
+       )
+     ORDER BY p.name,y.ytm_id,t.sort,t.video_id`).all();
+
+  // A video may occur in more than one linked upstream source. The staged
+  // table is intentionally keyed by video_id, so retain one deterministic
+  // target and merge safety flags from all observations.
+  const unique = new Map<string, Candidate & { flags: Set<string> }>();
+  for (const row of rows) {
+    const flags = unique.get(row.video_id);
+    const rowFlags = new Set<string>();
+    if (row.source_count > 300) rowFlags.add("oversized");
+    if (row.title !== null && junkTitle.test(row.title)) rowFlags.add("junk");
+    if (row.unavailable) rowFlags.add("unavailable");
+    if (!flags) unique.set(row.video_id, { ...row, flags: rowFlags });
+    else for (const flag of rowFlags) flags.flags.add(flag);
+  }
+
+  // Existing rows are review state. Never reset their status, destination, or
+  // metadata when staging is rerun; only previously unseen videos are inserted.
+  const insert = db.query(`
+    INSERT OR IGNORE INTO ytm_staged(
+      video_id,ytm_id,local_playlist,title,artist,status,flags,staged_at
+    ) VALUES(?,?,?,?,?,'pending',?,?)`);
+  const byPlaylist: Record<string, number> = {};
+  let staged = 0;
+  let skipped = 0;
+  const ts = now();
+
+  db.transaction(() => {
+    for (const row of unique.values()) {
+      const changed = insert.run(
+        row.video_id, row.ytm_id, row.local_playlist, row.title, row.artist,
+        [...row.flags].join(","), ts,
+      ).changes;
+      if (!changed) {
+        // Review state stays, but a track that went grey upstream gets marked.
+        if (row.flags.has("unavailable")) addFlag([row.video_id], "unavailable");
+        skipped++;
+        continue;
+      }
+      staged++;
+      byPlaylist[row.local_playlist] = (byPlaylist[row.local_playlist] ?? 0) + 1;
+    }
+  })();
+
+  return { staged, skipped, byPlaylist };
+}
+
+/** Staged rows, grouped for review by their local download destination. */
+export function staged() {
+  const rows = db.query<StagedRow, []>(
+    `SELECT video_id AS videoId,ytm_id AS ytmId,local_playlist AS localPlaylist,
+            title,artist,status,COALESCE(flags,'') AS flags,staged_at AS stagedAt
+     FROM ytm_staged ORDER BY local_playlist,title,artist,video_id`).all();
+  const groups = new Map<string, { localPlaylist: string; rows: StagedRow[];
+    counts: Record<StagedStatus, number> }>();
+  for (const row of rows) {
+    let group = groups.get(row.localPlaylist);
+    if (!group) {
+      group = {
+        localPlaylist: row.localPlaylist,
+        rows: [],
+        counts: { pending: 0, approved: 0, rejected: 0, downloaded: 0 },
+      };
+      groups.set(row.localPlaylist, group);
+    }
+    group.rows.push(row);
+    group.counts[row.status]++;
+  }
+  return [...groups.values()];
+}
+
+function setStagedStatus(videoIds: string[], status: "approved" | "rejected") {
+  const ids = [...new Set(videoIds)];
+  const q = db.query(
+    `UPDATE ytm_staged SET status=? WHERE video_id=?
+     AND status ${status === "approved" ? "IN ('pending','rejected')" : "IN ('pending','approved')"}`,
+  );
+  let updated = 0;
+  db.transaction(() => {
+    for (const id of ids) updated += q.run(status, id).changes;
+  })();
+  return { updated, skipped: ids.length - updated };
+}
+
+/**
+ * Mark staged tracks with a flag (unavailable, premium, in-library) instead of
+ * deciding for the user: approved rows fall back to pending so they are not
+ * retried, and stay visible in review with the flag as the reason.
+ */
+export function addFlag(videoIds: string[], flag: string) {
+  const q = db.query(
+    `UPDATE ytm_staged SET
+       flags = CASE WHEN COALESCE(flags,'')='' THEN ?1
+                    WHEN ','||flags||',' LIKE '%,'||?1||',%' THEN flags
+                    ELSE flags||','||?1 END,
+       status = CASE WHEN status='approved' THEN 'pending' ELSE status END
+     WHERE video_id=?2 AND status IN ('pending','approved')`);
+  let updated = 0;
+  db.transaction(() => { for (const id of new Set(videoIds)) updated += q.run(flag, id).changes; })();
+  return { updated };
+}
+
+export function approve(videoIds: string[]) {
+  return setStagedStatus(videoIds, "approved");
+}
+
+export function reject(videoIds: string[]) {
+  return setStagedStatus(videoIds, "rejected");
+}
+
+export function approved(videoIds?: string[], localPlaylist?: string) {
+  const ids = videoIds === undefined ? undefined : [...new Set(videoIds)];
+  const params: string[] = [];
+  const filters = ["status='approved'"];
+  if (ids) {
+    if (!ids.length) return [] as StagedRow[];
+    filters.push(`video_id IN (${ids.map(() => "?").join(",")})`);
+    params.push(...ids);
+  }
+  if (localPlaylist !== undefined) {
+    filters.push("local_playlist=?");
+    params.push(localPlaylist);
+  }
+  return db.query<StagedRow, string[]>(
+    `SELECT video_id AS videoId,ytm_id AS ytmId,local_playlist AS localPlaylist,
+            title,artist,status,COALESCE(flags,'') AS flags,staged_at AS stagedAt
+     FROM ytm_staged WHERE ${filters.join(" AND ")} ORDER BY local_playlist,title,artist,video_id`,
+  ).all(...params);
+}
+
+type MembershipRequest = {
+  playlistId: number;
+  playlistName: string;
+  trackId: number;
+};
+
+type AddedMemberships = Map<string, number[]>;
+
+const linkedMembershipTargets = db.query<
+  { playlistId: number; playlistName: string }, [string]
+>(`SELECT DISTINCT p.id AS playlistId,p.name AS playlistName
+   FROM ytm_tracks t
+   JOIN ytm_playlists y ON y.ytm_id=t.ytm_id
+   JOIN playlists p ON p.id=y.local_playlist_id
+   WHERE t.video_id=?
+   ORDER BY p.name,p.id`);
+
+function automaticMembershipTargets(videoId: string) {
+  return linkedMembershipTargets.all(videoId).filter((target) =>
+    !AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS.some((name) => name === target.playlistName));
+}
+
+/** Insert memberships in playlist order and report only rows actually added. */
+function insertMemberships(requests: MembershipRequest[]): AddedMemberships {
+  const max = db.query<{ sort: number }, [number]>(
+    "SELECT COALESCE(MAX(sort),0) sort FROM memberships WHERE playlist_id=?",
+  );
+  const add = db.query(
+    "INSERT OR IGNORE INTO memberships(playlist_id,track_id,sort) VALUES(?,?,?)");
+  const nextSort = new Map<number, number>();
+  const seen = new Set<string>();
+  const added: AddedMemberships = new Map();
+
+  for (const request of requests) {
+    const key = `${request.playlistId}\u0000${request.trackId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const sort = nextSort.get(request.playlistId)
+      ?? max.get(request.playlistId)!.sort;
+    if (!add.run(request.playlistId, request.trackId, sort + 1).changes) continue;
+    nextSort.set(request.playlistId, sort + 1);
+    const trackIds = added.get(request.playlistName);
+    if (trackIds) trackIds.push(request.trackId);
+    else added.set(request.playlistName, [request.trackId]);
+  }
+  return added;
+}
+
+function recordAddedMemberships(added: AddedMemberships) {
+  let total = 0;
+  for (const [playlist, trackIds] of added) {
+    ops.recordMembership("add_to", playlist, trackIds);
+    total += trackIds.length;
+  }
+  if (total) markDirty("changes");
+  return total;
+}
+
+/** Finalize only tracks that the downloader successfully indexed. */
+export function completeStaged(videoIds: string[], localPlaylist: string) {
+  const playlist = db.query<{ id: number }, [string]>(
+    "SELECT id FROM playlists WHERE name=?").get(localPlaylist);
+  if (!playlist) throw new Error(`unknown local playlist ${localPlaylist}`);
+
+  const ids = [...new Set(videoIds)];
+  const stagedRows = db.query<{ video_id: string }, [string, string]>(
+    `SELECT video_id FROM ytm_staged
+     WHERE video_id=? AND local_playlist=? AND status='approved'`,
+  );
+  const tracks = db.query<{ id: number }, [string]>(
+    "SELECT id FROM tracks WHERE video_id=? AND missing=0 ORDER BY id LIMIT 1",
+  );
+  const mark = db.query(
+    "UPDATE ytm_staged SET status='downloaded' WHERE video_id=? AND local_playlist=? AND status='approved'",
+  );
+  const downloaded: string[] = [];
+  const requests: MembershipRequest[] = [];
+  let added: AddedMemberships = new Map();
+
+  db.transaction(() => {
+    for (const id of ids) {
+      if (!stagedRows.get(id, localPlaylist)) continue;
+      const track = tracks.get(id);
+      if (!track) continue;
+      if (mark.run(id, localPlaylist).changes) downloaded.push(id);
+      // The download folder remains the primary membership even when it is one
+      // of the curated playlists excluded from automatic fan-out.
+      requests.push({
+        playlistId: playlist.id,
+        playlistName: localPlaylist,
+        trackId: track.id,
+      });
+      for (const target of automaticMembershipTargets(id)) {
+        requests.push({ ...target, trackId: track.id });
+      }
+    }
+    added = insertMemberships(requests);
+  })();
+
+  const membershipsAdded = recordAddedMemberships(added);
+  return { downloaded, membershipsAdded };
+}
+
+/** Add missing linked-playlist memberships for tracks already in the library. */
+export function backfillMemberships() {
+  const rows = db.query<MembershipRequest, []>(`
+    WITH own AS (
+      SELECT video_id,MIN(id) AS trackId
+      FROM tracks
+      WHERE missing=0 AND video_id IS NOT NULL
+      GROUP BY video_id
+    ), available AS (
+      SELECT o.video_id,COALESCE(r.track_id,o.trackId) AS trackId
+      FROM own o LEFT JOIN track_replacements r ON r.video_id=o.video_id
+    )
+    SELECT DISTINCT p.id AS playlistId,p.name AS playlistName,a.trackId
+    FROM available a
+    JOIN ytm_tracks t ON t.video_id=a.video_id
+    JOIN ytm_playlists y ON y.ytm_id=t.ytm_id
+    JOIN playlists p ON p.id=y.local_playlist_id
+    ORDER BY p.name,p.id,a.trackId
+  `).all().filter((row) =>
+    !AUTO_MEMBERSHIP_EXCLUDED_PLAYLISTS.some((name) => name === row.playlistName));
+
+  let added: AddedMemberships = new Map();
+  db.transaction(() => { added = insertMemberships(rows); })();
+  const total = recordAddedMemberships(added);
+  return {
+    added: total,
+    byPlaylist: Object.fromEntries([...added].map(([name, ids]) => [name, ids.length])),
+  };
+}
+
 export function unlink(ytmId: string) {
   db.query("UPDATE ytm_playlists SET local_playlist_id=NULL WHERE ytm_id=?").run(ytmId);
 }
@@ -176,42 +490,143 @@ export function link(localPlaylistId: number, ytmId: string) {
 }
 
 /**
- * Fetch every linked upstream playlist.
+ * Fetch linked playlists by default. An explicit id list is never filtered by
+ * link state; includeUnlinked is opt-in because public playlists can be huge.
  *
  * Keyed by upstream id, never by local name: several upstream playlists may
  * feed one local playlist (two “Haussss”, “techno” and “Techno”), and a
  * name-keyed map would silently drop all but one of them.
  */
-export async function refresh(ytmIds?: string[]) {
-  const rows = db.query<{ ytm_id: string }, []>(
-    "SELECT ytm_id FROM ytm_playlists WHERE local_playlist_id IS NOT NULL").all();
-  const wanted = rows
-    .map((r) => r.ytm_id)
-    .filter((id) => !ytmIds?.length || ytmIds.includes(id));
-  const targets = Object.fromEntries(wanted.map((id) => [id, id]));
+export async function refresh(
+  ytmIds?: string[], opts: { includeUnlinked?: boolean } = {},
+) {
+  const wanted = ytmIds === undefined
+    ? db.query<{ ytm_id: string }, []>(
+        `SELECT ytm_id FROM ytm_playlists
+         ${opts.includeUnlinked ? "" : "WHERE local_playlist_id IS NOT NULL"}`,
+      ).all().map((r) => r.ytm_id)
+    : [...new Set(ytmIds)];
+  const res: BridgeFetch = { playlists: [], errors: [] };
+  const results: PromiseSettledResult<Awaited<ReturnType<typeof fetchPlaylist>>>[] = [];
+  for (let i = 0; i < wanted.length; i += 6) {   // a few at a time, like the old bridge
+    results.push(...await Promise.allSettled(wanted.slice(i, i + 6).map((id) => fetchPlaylist(id))));
+  }
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") res.playlists.push({ name: wanted[i]!, ...r.value });
+    else res.errors.push({ playlist: wanted[i]!, error: String(r.reason).slice(0, 200) });
+  });
+  return ingest(res);
+}
 
-  const res = await py<BridgeFetch>("ytm_bridge.py", "fetch", { playlists: targets }, 600_000);
+/**
+ * Ingest the dj-sync Worker's snapshot of the linked playlists (DJ_SYNC_URL,
+ * DJ_SYNC_TOKEN from data/sync.env). The daemon calls this instead of reading
+ * YouTube from the PC.
+ */
+export async function pull() {
+  const url = process.env.DJ_SYNC_URL, token = process.env.DJ_SYNC_TOKEN;
+  if (!url || !token) throw new Error("DJ_SYNC_URL / DJ_SYNC_TOKEN not set (data/sync.env)");
+  const auth = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  // Keep the Worker's list equal to what is linked here; a newly linked
+  // playlist shows up as `pending` until the Worker's next cron run.
+  const ids = db.query<{ ytm_id: string }, []>(
+    `SELECT y.ytm_id FROM ytm_playlists y JOIN playlists p ON p.id=y.local_playlist_id
+     WHERE p.name NOT IN (${syncExcludedSql})`).all().map((r) => r.ytm_id);
+  const put = await fetch(`${url}/playlists`, { method: "PUT", headers: auth, body: JSON.stringify({ ids }) });
+  if (!put.ok) throw new Error(`dj-sync playlists: HTTP ${put.status}`);
+  const res = await fetch(`${url}/snapshot`, { headers: auth });
+  if (!res.ok) throw new Error(`dj-sync snapshot: HTTP ${res.status}`);
+  const snap = await res.json() as BridgeFetch & { pending: string[] };
+  const known = new Set(db.query<{ ytm_id: string }, []>("SELECT ytm_id FROM ytm_playlists").all()
+    .map((r) => r.ytm_id));
+  // YouTube intermittently answers the Worker with 403 (it blocks Cloudflare's
+  // egress addresses), and the snapshot then carries only stale playlists. The
+  // same read works from this machine, so re-read every playlist the Worker
+  // failed on locally and report an error only if that fails too.
+  const failed = snap.errors.map((e) => e.playlist).filter((id) => known.has(id));
+  const fromWorker = ingest({
+    playlists: snap.playlists.filter((p) => known.has(p.ytmId) && !failed.includes(p.ytmId)),
+    errors: [],
+  });
+  if (failed.length === 0) return { ...fromWorker, pending: snap.pending };
+  log(`dj-sync Worker failed on ${failed.length} playlists (${snap.errors[0]!.error}); reading them locally`);
+  const local = await refresh(failed);
+  return {
+    refreshed: [...fromWorker.refreshed, ...local.refreshed],
+    errors: local.errors,
+    pending: snap.pending,
+  };
+}
 
+function ingest(res: BridgeFetch) {
   const upsertPl = db.query(
-    `UPDATE ytm_playlists SET title=?, count=?, fetched_at=? WHERE ytm_id=?`);
+    `UPDATE ytm_playlists SET title=?, count=?, track_count=?, fetched_at=? WHERE ytm_id=?`);
   const clearTracks = db.query("DELETE FROM ytm_tracks WHERE ytm_id=?");
   const addTrack = db.query(
-    "INSERT OR REPLACE INTO ytm_tracks(ytm_id,video_id,title,artist,sort) VALUES(?,?,?,?,?)");
+    "INSERT OR REPLACE INTO ytm_tracks(ytm_id,video_id,title,artist,sort,unavailable) VALUES(?,?,?,?,?,?)");
 
   const ts = now();
   db.transaction(() => {
     for (const p of res.playlists) {
-      upsertPl.run(p.title, p.tracks.length, ts, p.ytmId);
+      upsertPl.run(p.title, p.tracks.length, p.trackCount ?? null, ts, p.ytmId);
       clearTracks.run(p.ytmId);
-      for (const t of p.tracks) addTrack.run(p.ytmId, t.videoId, t.title, t.artist, t.sort);
+      for (const t of p.tracks) {
+        addTrack.run(p.ytmId, t.videoId, t.title, t.artist, t.sort, t.unavailable ? 1 : 0);
+      }
     }
   })();
 
   setMeta("last_ytm_sync", ts);
   log("ytm_refresh", { n: res.playlists.length }, `${res.errors.length} errors`);
   return {
-    refreshed: res.playlists.map((p) => ({ playlist: p.title, count: p.tracks.length })),
+    refreshed: res.playlists.map((p) => ({
+      playlist: p.title,
+      count: p.tracks.length,
+    })),
     errors: res.errors,
+  };
+}
+
+/** Classify every local playlist and every discovered upstream source. */
+export function classify() {
+  const locals = db.query<
+    { localPlaylistId: number; name: string; localCount: number }, []
+  >(`SELECT p.id AS localPlaylistId,p.name,
+       (SELECT COUNT(*) FROM memberships m JOIN tracks t ON t.id=m.track_id
+        WHERE m.playlist_id=p.id AND t.missing=0) AS localCount
+     FROM playlists p ORDER BY p.name`).all();
+  const sources = db.query<
+    { ytmId: string; title: string; localPlaylistId: number | null;
+      count: number; fetchedAt: number }, []
+  >(`SELECT ytm_id AS ytmId,title,local_playlist_id AS localPlaylistId,
+            count,fetched_at AS fetchedAt
+     FROM ytm_playlists ORDER BY title,ytm_id`).all();
+
+  const byLocal = new Map<number, typeof sources>();
+  for (const source of sources) {
+    if (source.localPlaylistId == null) continue;
+    const list = byLocal.get(source.localPlaylistId);
+    if (list) list.push(source); else byLocal.set(source.localPlaylistId, [source]);
+  }
+  const view = (source: typeof sources[number]) => ({
+    ytmId: source.ytmId,
+    title: source.title,
+    // A never-fetched playlist is unknown, not an empty playlist.
+    count: source.fetchedAt ? source.count : null,
+    fetchedAt: source.fetchedAt,
+  });
+
+  return {
+    linked: locals.filter((local) => byLocal.has(local.localPlaylistId)).map((local) => ({
+      localPlaylistId: local.localPlaylistId,
+      localName: local.name,
+      sources: byLocal.get(local.localPlaylistId)!.map(view),
+      localCount: local.localCount,
+    })),
+    upstreamOnly: sources
+      .filter((source) => source.localPlaylistId == null)
+      .map(view),
+    localOnly: locals.filter((local) => !byLocal.has(local.localPlaylistId)),
   };
 }
 

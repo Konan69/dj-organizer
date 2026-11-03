@@ -1,0 +1,421 @@
+/*
+ * dj-organizer design system.
+ *
+ * Scene: a bedroom at night, a laptop beside a DDJ-FLX4, headphones on,
+ * prepping a set. Mid charcoal (never black) so waveforms and key colours
+ * carry the colour, and one coral accent (club-light warm) for the thing to press.
+ *
+ * Every component references the role tokens below, never a raw value.
+ */
+@import "@fontsource-variable/manrope";
+
+:root {
+  color-scheme: dark;
+
+  /* ---- neutral ramp: mid charcoal like DJ.Studio, never near-black.
+         Chrome (top bar, rails, player) sits one step darker than the
+         canvas so the content area reads as the lit stage. ---- */
+  --n-0: oklch(0.255 0.004 100);  /* #232321 chrome: top bar, rails, player, panels */
+  --n-1: oklch(0.285 0.004 100);  /* #2a2a28 canvas */
+  --n-2: oklch(0.320 0.004 100);  /* #333331 rows on hover, inputs, popovers */
+  --n-3: oklch(0.365 0.004 100);  /* #3f3e3c buttons */
+  --n-4: oklch(0.415 0.004 100);  /* #4c4c49 pressed, selected */
+  --n-5: oklch(0.480 0.004 100);  /* #5e5e5b strong borders, scrollbar */
+
+  --bg: var(--n-1);
+  --surface: var(--n-0);
+  --raised: var(--n-2);
+  --control: var(--n-3);
+  --control-hover: var(--n-4);
+  --line: oklch(1 0 0 / 0.08);
+  --line-strong: oklch(1 0 0 / 0.15);
+
+  /* Measured WCAG ratios (OKLCH → sRGB), worst surface each text may sit on. */
+  --text: oklch(0.975 0.003 100);    /* 8.0:1 on n-4 */
+  --text-2: oklch(0.845 0.004 100);  /* 5.4:1 on n-4 */
+  --text-3: oklch(0.775 0.004 100);  /* 5.2:1 on control; never on n-4 (4.2) */
+  --text-4: oklch(0.600 0.004 100);  /* disabled only, never content */
+
+  /* ---- accent: the one colour that means "press this" ---- */
+  /* Coral #fe886a. Measured: ink on accent 7.7:1; accent as text 6.1 bg, 5.4 raised, 4.5 control. */
+  --accent: oklch(0.750 0.150 35);
+  --accent-hover: oklch(0.790 0.135 35);
+  --accent-ink: oklch(0.200 0.030 35);        /* text on accent */
+  --accent-soft: oklch(0.750 0.150 35 / 0.16);
+  --accent-line: oklch(0.750 0.150 35 / 0.6);
+
+  /* ---- status ---- */
+  --ok: oklch(0.800 0.160 150);
+  --ok-soft: oklch(0.800 0.160 150 / 0.16);
+  --warn: oklch(0.820 0.150 70);
+  --warn-soft: oklch(0.820 0.150 70 / 0.16);
+  /* Rose-red, 25° off the coral accent so Delete never reads as the primary
+     action (it sat 10° away before and rendered almost the same #ff877f).
+     Measured: 4.81 on control, 5.73 raised, 7.13 surface. */
+  --danger: oklch(0.780 0.150 10);
+  --danger-soft: oklch(0.780 0.150 10 / 0.16);
+  --info: oklch(0.740 0.120 250);
+  --info-soft: oklch(0.740 0.120 250 / 0.16);
+  /* Text on a *-soft tint: lighter so it clears 4.5:1 on every surface (measured ≥4.9). */
+  --ok-ink: oklch(0.860 0.110 150);
+  --warn-ink: oklch(0.860 0.110 70);
+  --danger-ink: oklch(0.860 0.100 10);
+  --info-ink: oklch(0.860 0.080 250);
+
+  /* ---- rekordbox 3-band waveform: low blue, mid amber, high cream ---- */
+  --wave-low: oklch(0.560 0.170 262);
+  --wave-mid: oklch(0.700 0.150 55);
+  --wave-high: oklch(0.900 0.040 75);
+  --wave-mono: oklch(0.600 0.020 250);
+
+  /* ---- phrase colours ---- */
+  --ph-intro: oklch(0.680 0.120 240);
+  --ph-verse: oklch(0.690 0.100 205);
+  --ph-up: oklch(0.640 0.170 300);
+  --ph-down: oklch(0.620 0.100 60);
+  --ph-chorus: oklch(0.720 0.160 145);
+  --ph-bridge: oklch(0.740 0.110 95);
+  --ph-outro: oklch(0.600 0.090 255);
+
+  /* ---- type: one family, tight 1.125 scale ---- */
+  --font: "Manrope Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 17px;
+  --fs-2xl: 20px;
+  --fs-3xl: 24px;
+
+  /* ---- shape ---- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* ---- motion ---- */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --t-fast: 120ms;
+  --t-med: 180ms;
+  --t-slow: 240ms;
+
+  /* ---- depth ---- */
+  --shadow-pop: 0 1px 0 oklch(1 0 0 / 0.04) inset, 0 12px 32px oklch(0 0 0 / 0.45), 0 2px 6px oklch(0 0 0 / 0.3);
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-overlay: 30;
+  --z-modal: 40;
+  --z-toast: 50;
+  --z-tooltip: 60;
+
+  /* ---- legacy aliases: older components (modals, Learn) read these ---- */
+  --panel: var(--surface);
+  --panel-2: var(--raised);
+  --line-soft: var(--line);
+  --fg: var(--text);
+  --fg-2: var(--text-2);
+  --fg-3: var(--text-3);
+  --accent-dim: var(--accent-soft);
+  --violet: var(--ph-up);
+  --radius: var(--r-md);
+}
+
+/* ---------------------------------------------------------------- base -- */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button { background: none; border: 0; cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+img { display: block; }
+.num, .tabular { font-variant-numeric: tabular-nums; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs); }
+::selection { background: var(--accent-soft); color: var(--text); }
+
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--n-4); border: 3px solid transparent; background-clip: padding-box; border-radius: var(--r-pill); }
+::-webkit-scrollbar-thumb:hover { background: var(--n-5); background-clip: padding-box; border: 3px solid transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- buttons -- */
+
+.ui-btn {
+  --btn-bg: var(--control);
+  --btn-fg: var(--text);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 36px; padding: 0 14px; border-radius: var(--r-md);
+  background: var(--btn-bg); color: var(--btn-fg);
+  font-size: var(--fs-md); font-weight: 550; white-space: nowrap;
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease, scale var(--t-fast) var(--ease-out);
+}
+.ui-btn:hover:not(:disabled) { --btn-bg: var(--control-hover); }
+.ui-btn:active:not(:disabled) { scale: 0.96; }
+.ui-btn:disabled { opacity: 0.45; }
+.ui-btn svg { width: 16px; height: 16px; flex: none; }
+
+.ui-btn.primary { --btn-bg: var(--accent); --btn-fg: var(--accent-ink); font-weight: 650; }
+.ui-btn.primary:hover:not(:disabled) { --btn-bg: var(--accent-hover); }
+.ui-btn.ghost { --btn-bg: transparent; --btn-fg: var(--text-2); }
+.ui-btn.ghost:hover:not(:disabled) { --btn-bg: var(--control); --btn-fg: var(--text); }
+.ui-btn.outline { --btn-bg: transparent; box-shadow: inset 0 0 0 1px var(--line-strong); }
+.ui-btn.outline:hover:not(:disabled) { --btn-bg: var(--raised); }
+.ui-btn.danger:hover:not(:disabled) { --btn-bg: var(--danger-soft); --btn-fg: var(--danger-ink); }
+.ui-btn.sm { height: 30px; padding: 0 11px; font-size: var(--fs-sm); border-radius: var(--r-sm); }
+.ui-btn.lg { height: 44px; padding: 0 20px; font-size: var(--fs-lg); border-radius: var(--r-lg); }
+.ui-btn.pill { border-radius: var(--r-pill); }
+
+.ui-icon-btn {
+  display: inline-grid; place-items: center; flex: none;
+  width: 34px; height: 34px; border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease, scale var(--t-fast) var(--ease-out);
+}
+.ui-icon-btn:hover:not(:disabled) { background: var(--control); color: var(--text); }
+.ui-icon-btn:active:not(:disabled) { scale: 0.96; }
+.ui-icon-btn:disabled { opacity: 0.4; }
+.ui-icon-btn.on { background: var(--control); color: var(--text); }
+.ui-icon-btn.sm { width: 28px; height: 28px; border-radius: var(--r-sm); }
+.ui-icon-btn.round { border-radius: var(--r-pill); }
+.ui-icon-btn svg { width: 18px; height: 18px; }
+.ui-icon-btn.sm svg { width: 16px; height: 16px; }
+
+/* Add-to-set: a quiet square that only lights up when reached for. */
+.ui-add {
+  display: inline-grid; place-items: center; flex: none;
+  width: 32px; height: 32px; border-radius: var(--r-md);
+  background: transparent; color: var(--text-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease, box-shadow var(--t-fast) ease, scale var(--t-fast) var(--ease-out);
+}
+.ui-add svg { width: 16px; height: 16px; }
+.ui-add:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+.ui-add:active:not(:disabled) { scale: 0.96; }
+.ui-add:disabled, .ui-add.done { background: transparent; color: var(--ok); box-shadow: none; cursor: default; }
+
+/* Circular play button used on rows and cards. */
+.ui-play {
+  display: inline-grid; place-items: center; flex: none;
+  width: 32px; height: 32px; border-radius: var(--r-pill);
+  background: var(--control); color: var(--text);
+  transition: background-color var(--t-fast) ease, scale var(--t-fast) var(--ease-out);
+}
+.ui-play svg { width: 14px; height: 14px; }
+.ui-play:hover { background: var(--control-hover); }
+.ui-play:active { scale: 0.96; }
+.ui-play.on { background: var(--accent); color: var(--accent-ink); }
+
+/* ---------------------------------------------------------- segmented -- */
+
+.ui-seg {
+  display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+  background: var(--raised); border-radius: var(--r-md);
+}
+.ui-seg button {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 12px; border-radius: var(--r-sm);
+  color: var(--text-2); font-size: var(--fs-sm); font-weight: 550; white-space: nowrap;
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease;
+}
+.ui-seg button svg { width: 16px; height: 16px; }
+.ui-seg button:hover:not(.on) { color: var(--text); background: var(--control); }
+.ui-seg button.on { background: var(--n-4); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* Label stays --text: coral on the coral tint over --raised measured 4.09:1. */
+.ui-seg.accent button.on { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.ui-seg.lg button { height: 36px; padding: 0 16px; font-size: var(--fs-md); }
+
+/* -------------------------------------------------------------- fields -- */
+
+.ui-field {
+  display: flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 12px; border-radius: var(--r-md);
+  background: var(--raised); color: var(--text-3);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: box-shadow var(--t-fast) ease, background-color var(--t-fast) ease;
+}
+.ui-field:hover { box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* Fields drop the outline, so the ring must carry focus alone: solid 2px
+   coral (5.38:1 on --raised); the 60% hairline it replaces measured 2.89:1. */
+.ui-field:focus-within { box-shadow: inset 0 0 0 2px var(--accent); background: var(--n-2); }
+.ui-field svg { width: 16px; height: 16px; flex: none; }
+.ui-field input, .ui-field select {
+  flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: 0;
+  color: var(--text); font-size: var(--fs-md);
+}
+.ui-field input::placeholder, .ui-field textarea::placeholder { color: var(--text-3); }
+.ui-field kbd, .ui-kbd {
+  font: 500 11px/1 var(--mono); color: var(--text-3);
+  padding: 3px 6px; border-radius: var(--r-xs); background: var(--control);
+}
+
+.ui-select {
+  appearance: none; height: 36px; padding: 0 34px 0 12px; border-radius: var(--r-md);
+  background: var(--raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23a8a8a2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.5 6.5 3.5 3.5 3.5-3.5'/%3E%3C/svg%3E") no-repeat right 10px center;
+  box-shadow: inset 0 0 0 1px var(--line); color: var(--text); font-size: var(--fs-md);
+  border: 0; outline: 0; cursor: pointer;
+}
+.ui-select:hover { box-shadow: inset 0 0 0 1px var(--line-strong); }
+.ui-select:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); outline: 0; }
+.ui-select.sm { height: 30px; font-size: var(--fs-sm); border-radius: var(--r-sm); }
+select option { background: var(--n-2); color: var(--text); }
+
+.ui-textarea {
+  width: 100%; min-height: 84px; padding: 10px 12px; resize: vertical;
+  border-radius: var(--r-md); border: 0; outline: 0;
+  background: var(--raised); color: var(--text); font-size: var(--fs-md); line-height: 1.5;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.ui-textarea:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.ui-textarea::placeholder { color: var(--text-3); }
+
+.ui-label { display: block; font-size: var(--fs-sm); font-weight: 550; color: var(--text-2); margin-bottom: 6px; }
+
+/* --------------------------------------------------------------- badges -- */
+
+/* Camelot key: a soft pill tinted by its wheel position. The tint mixes into
+   --surface, not transparent, so the pill is the same dark chip on every row:
+   worst key (6A) 6.22:1. A see-through tint fell to 4.21 on --control (Studio
+   clip heads) and 4.24 on selected library rows. */
+.ui-key {
+  --k: var(--text-3);
+  display: inline-grid; place-items: center; flex: none;
+  min-width: 42px; height: 24px; padding: 0 9px; border-radius: var(--r-pill);
+  color: var(--k); font-size: var(--fs-sm); font-weight: 700; font-variant-numeric: tabular-nums;
+  background: color-mix(in oklab, var(--k) 16%, var(--surface));
+}
+.ui-key.sm { min-width: 36px; height: 20px; font-size: var(--fs-xs); padding: 0 7px; }
+.ui-key.solid { background: var(--k); color: oklch(0.2 0.02 100); }
+.ui-key.none { --k: var(--text-3); background: transparent; }
+
+/* Counts in rails: a quiet number, no box. */
+.ui-count {
+  flex: none; min-width: 24px; text-align: end;
+  font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.ui-count.accent { color: var(--accent); }
+.ui-count.warn { color: var(--warn); }
+.ui-count.danger { color: var(--danger); }
+
+.ui-tag {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 22px; padding: 0 8px; border-radius: var(--r-pill);
+  font-size: var(--fs-xs); font-weight: 550; white-space: nowrap;
+  color: var(--text-2); background: var(--control);
+}
+.ui-tag.ok { color: var(--ok-ink); background: var(--ok-soft); }
+.ui-tag.warn { color: var(--warn-ink); background: var(--warn-soft); }
+.ui-tag.danger { color: var(--danger-ink); background: var(--danger-soft); }
+/* Coral is for the thing to press, never a status; in-progress and energy-boost read blue. */
+.ui-tag.info { color: var(--info-ink); background: var(--info-soft); }
+.ui-dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: currentColor; flex: none; }
+
+/* ---------------------------------------------------------------- art -- */
+
+.ui-art {
+  position: relative; flex: none; overflow: hidden;
+  width: 48px; height: 48px; border-radius: var(--r-sm);
+  background: var(--control);
+  outline: 1px solid oklch(1 0 0 / 0.08); outline-offset: -1px;
+}
+.ui-art img { width: 100%; height: 100%; object-fit: cover; }
+.ui-art .ph {
+  display: grid; place-items: center; width: 100%; height: 100%;
+  font-weight: 700; font-size: var(--fs-lg); color: var(--text-3);
+}
+.ui-art .hover-play {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: oklch(0 0 0 / 0.5); color: var(--text); opacity: 0;
+  transition: opacity var(--t-fast) ease;
+}
+.ui-art .hover-play svg { width: 18px; height: 18px; }
+.ui-art:hover .hover-play, .ui-art.playing .hover-play { opacity: 1; }
+.ui-art.playing { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* --------------------------------------------------------- menus/pops -- */
+
+.ui-pop {
+  position: fixed; z-index: var(--z-dropdown); min-width: 220px; padding: 6px;
+  background: var(--n-2); border-radius: var(--r-lg); box-shadow: var(--shadow-pop);
+  outline: 1px solid var(--line-strong);
+  transform-origin: var(--origin, top left);
+  animation: ui-pop-in var(--t-med) var(--ease-out);
+}
+@keyframes ui-pop-in { from { opacity: 0; scale: 0.96; } }
+.ui-pop .item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px;
+  padding: 0 10px; border-radius: var(--r-sm); text-align: left;
+  font-size: var(--fs-md); color: var(--text);
+}
+.ui-pop .item svg { width: 16px; height: 16px; color: var(--text-3); flex: none; }
+.ui-pop .item:hover:not(:disabled), .ui-pop .item.active { background: var(--control); }
+.ui-pop .item:disabled { color: var(--text-4); }
+.ui-pop .item .hint { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); }
+.ui-pop .item.danger { color: var(--danger); }
+.ui-pop .item.danger svg { color: var(--danger); }
+.ui-pop .sep { height: 1px; margin: 5px 4px; background: var(--line); }
+.ui-pop .head { padding: 8px 10px 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
+.ui-scrim { position: fixed; inset: 0; z-index: calc(var(--z-dropdown) - 1); }
+
+/* ------------------------------------------------------------- empty -- */
+
+.ui-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 56px 24px; text-align: center; color: var(--text-3);
+}
+.ui-empty .title { color: var(--text); font-size: var(--fs-lg); font-weight: 600; }
+.ui-empty p { max-width: 42ch; text-wrap: pretty; }
+.ui-empty .ui-btn { margin-top: 8px; }
+
+.ui-skel {
+  background: linear-gradient(90deg, var(--raised) 0%, var(--control) 50%, var(--raised) 100%);
+  background-size: 200% 100%; border-radius: var(--r-sm);
+  animation: ui-skel 1.4s linear infinite;
+}
+@keyframes ui-skel { to { background-position: -200% 0; } }
+
+/* ------------------------------------------------------------- toast -- */
+
+.ui-toast {
+  position: fixed; left: 50%; bottom: 96px; z-index: var(--z-toast);
+  translate: -50% 0; max-width: min(560px, calc(100vw - 32px));
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; border-radius: var(--r-lg);
+  background: var(--n-3); color: var(--text); box-shadow: var(--shadow-pop);
+  font-size: var(--fs-md); font-weight: 500;
+  animation: ui-toast-in var(--t-slow) var(--ease-out);
+}
+.ui-toast.ok .ui-dot { color: var(--ok); }
+.ui-toast.err { background: oklch(0.30 0.06 10); }
+.ui-toast.err .ui-dot { color: var(--danger); }
+.ui-toast .ui-icon-btn { margin-inline: 2px -8px; }
+@keyframes ui-toast-in { from { opacity: 0; translate: -50% 8px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

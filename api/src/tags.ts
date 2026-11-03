@@ -130,7 +130,7 @@ function findFfprobe() {
   return ffprobe;
 }
 
-export function readWebm(path: string, size: number): Meta {
+export function readTaggedAudio(path: string, size: number): Meta {
   const out = EMPTY();
   const bin = findFfprobe();
   if (!bin) return out;
@@ -157,7 +157,7 @@ export function readWebm(path: string, size: number): Meta {
 }
 
 export async function read(path: string, size: number): Promise<Meta> {
-  if (path.toLowerCase().endsWith(".webm")) return readWebm(path, size);
+  if (/\.(webm|flac)$/i.test(path)) return readTaggedAudio(path, size);
   const want = Math.min(size, 1_500_000);
   const ab = await Bun.file(path).slice(0, want).arrayBuffer();
   // Copy, don't view: Buffer.from(ArrayBuffer) aliases the underlying memory,

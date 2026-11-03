@@ -22,7 +22,10 @@ export async function unwrap<T>(
   const { data, error } = await p;
   if (error) {
     const e = error as { value?: { error?: string }; status?: number };
-    throw new Error(e.value?.error ?? `request failed (${e.status ?? "network"})`);
+    // Plain words, never a status code: this lands in a toast.
+    throw new Error(e.value?.error ?? (e.status
+      ? "The server hit an error. Try again."
+      : "Can't reach the app server. Check it's running, then try again."));
   }
   if (data && typeof data === "object" && "error" in data) {
     throw new Error(String((data as { error: unknown }).error));
@@ -43,3 +46,6 @@ export type StoresView = Unwrapped<ReturnType<typeof api.stores.get>>;
 export type Op = Unwrapped<ReturnType<typeof api.ops.get>>[number];
 export type PlanFor = Unwrapped<ReturnType<ReturnType<typeof api.plan>["get"]>>;
 export type YtmCandidates = Unwrapped<ReturnType<typeof api.ytm.candidates.get>>;
+export type TrackHistory = Unwrapped<ReturnType<ReturnType<typeof api.track>["history"]["get"]>>;
+export type YtmClassify = Unwrapped<ReturnType<typeof api.ytm.classify.get>>;
+export type DownloadJob = Unwrapped<ReturnType<typeof api.download.get>>[number];

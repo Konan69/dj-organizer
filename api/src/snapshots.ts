@@ -5,7 +5,7 @@
  * it must survive restarts and be recoverable if a bulk action goes wrong.
  * Snapshots are taken before anything that changes membership in bulk.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { db, log, now } from "./db";
 import { DATA, DB_PATH } from "./paths";
@@ -15,11 +15,15 @@ const KEEP = 20;
 
 export function snapshot(reason: string) {
   mkdirSync(SNAP_DIR, { recursive: true });
-  // WAL contents must be folded into the main file before copying it.
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   const name = `${now()}-${reason.replace(/[^a-z0-9]+/gi, "-")}.db`;
   const dst = join(SNAP_DIR, name);
-  copyFileSync(DB_PATH, dst);
+  // SQLite writes the copy itself, WAL included. Never copy the live file with
+  // fs: opening and closing a second descriptor on library.db inside this
+  // process silently drops every POSIX lock SQLite holds on it, and the next
+  // outside connection to close then believes it is the last one and deletes
+  // the WAL from under the running server (2026-09-24: an hour of writes lived
+  // only in a deleted -wal until recovered from /proc/<pid>/fd).
+  db.query("VACUUM INTO ?").run(dst);
 
   const all = readdirSync(SNAP_DIR).filter((f) => f.endsWith(".db")).sort();
   for (const old of all.slice(0, Math.max(0, all.length - KEEP))) {

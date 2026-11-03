@@ -19,6 +19,8 @@ stop() {
 }
 
 start() {
+  # dj-sync Worker credentials for /api/ytm/pull
+  [ -f data/sync.env ] && { set -a; . data/sync.env; set +a; }
   setsid bun api/src/index.ts "$PORT" >>"$LOG" 2>&1 < /dev/null &
   echo $! > "$PIDF"
   for _ in $(seq 1 40); do

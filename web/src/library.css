@@ -1,0 +1,362 @@
+/*
+ * Library view: collections rail + track table.
+ *
+ * The vocabulary comes from theme.css (tokens and ui-* classes); this file is
+ * layout plus the few states the shared classes don't cover. Tokens only,
+ * role tokens only (no --n-* primitives).
+ *
+ * Every text pair here was measured (OKLCH -> WCAG) on the surface it renders
+ * on. Tightest: --danger on --danger-soft 4.63, --text-3 on selected rows 4.93,
+ * so selected rows lift secondary text to --text-2 (6.25) for margin. Nothing
+ * here puts --text-3 on --n-4.
+ */
+
+.lib {
+  flex: 1 1 auto; min-height: 0; min-width: 0;
+  display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+}
+
+/* ---------------------------------------------------------------- rail -- */
+
+.lib-rail {
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding-block: 12px 24px; padding-inline: 10px;
+  background: var(--surface); border-inline-end: 1px solid var(--line);
+}
+
+.lib-group {
+  display: flex; align-items: center; gap: 8px;
+  height: 32px; margin-block: 16px 2px; padding-inline: 10px 2px;
+  font-size: var(--fs-xs); font-weight: 600; line-height: 1.2; color: var(--text-3);
+}
+.lib-group:first-child { margin-block-start: 0; }
+.lib-group h2 { font: inherit; color: inherit; }
+.lib-group .ui-icon-btn { margin-inline-start: auto; }
+
+.lib-nav {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 36px;
+  padding-inline: 10px 8px; border-radius: var(--r-md);
+  color: var(--text-2); font-size: var(--fs-md); font-weight: 500; text-align: start;
+  transition-property: background-color, color, box-shadow;
+  transition-duration: var(--t-fast); transition-timing-function: ease;
+}
+.lib-nav + .lib-nav { margin-block-start: 2px; }
+/* Children ignore the pointer so dragging across them never fires dragleave. */
+.lib-nav > * { pointer-events: none; }
+.lib-nav > svg { width: 18px; height: 18px; flex: none; color: var(--text-3); transition: color var(--t-fast) ease; }
+.lib-nav .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-nav.active { background: var(--control); color: var(--text); font-weight: 600; }
+.lib-nav.active > svg { color: var(--text); }
+.lib-nav.drop { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
+.lib-nav.drop > svg { color: var(--accent); }
+.lib-nav:focus-visible { outline-offset: -2px; border-radius: var(--r-md); }
+
+@media (hover: hover) {
+  .lib-nav:hover:not(.active, .drop) { background: var(--raised); color: var(--text); }
+}
+
+/* ---------------------------------------------------------- main column -- */
+
+.lib-main {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  container: lib-main / inline-size;
+}
+
+.lib-head {
+  display: flex; align-items: center; gap: 16px; flex: none;
+  padding-block: 20px 16px; padding-inline: 24px;
+}
+.lib-heading { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex: 1 1 auto; }
+.lib-heading h1 {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-3xl); font-weight: 650; line-height: 1.15; letter-spacing: -0.015em;
+}
+.lib-meta { flex: none; font-size: var(--fs-md); color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lib-head-end { display: flex; align-items: center; gap: 12px; flex: none; }
+
+/* Toolbar and selection bar share one slot of one height, so the swap never shifts the list. */
+.lib-tools {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; flex: none;
+  min-height: 52px; padding-block: 0 16px; padding-inline: 24px;
+}
+.lib-tgroup { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.lib-spacer { flex: 1 1 0; }
+.lib-search { flex: 0 1 300px; min-width: 180px; }
+.lib-search input::-webkit-search-cancel-button { display: none; }
+.lib-selcount { font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.lib-tools .ui-select.sm { max-width: 220px; }
+.lib-tools .ui-select.on { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
+/* The on-state hairline outranks the shared focus ring; restore the ring when focused. */
+.lib-tools .ui-select.on:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* Filter toggles: the "on" state is a state indicator, so it may carry the accent. */
+.lib-pill {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: 30px; padding-inline: 12px; border-radius: var(--r-pill);
+  font-size: var(--fs-sm); font-weight: 550; white-space: nowrap; color: var(--text-2);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition-property: background-color, color, box-shadow, scale;
+  transition-duration: var(--t-fast); transition-timing-function: ease;
+}
+.lib-pill svg { width: 14px; height: 14px; flex: none; }
+.lib-pill .n { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.lib-pill:active { scale: 0.96; }
+.lib-pill.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.lib-pill.on .n { color: var(--accent); }
+.lib-pill.warn { background: var(--warn-soft); color: var(--warn); box-shadow: none; }
+.lib-pill:focus-visible { border-radius: var(--r-pill); }
+
+@media (hover: hover) {
+  .lib-pill:hover:not(.on, .warn) { background: var(--raised); color: var(--text); }
+}
+
+.lib-up { rotate: 180deg; }
+
+/* --------------------------------------------------------------- table -- */
+
+.lib-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-block: 0 24px; padding-inline: 8px; }
+
+.lib-table { --cols: 48px minmax(0, 1fr) minmax(0, 0.42fr) 56px 48px 52px 68px; }
+.lib-table.nofolder { --cols: 48px minmax(0, 1fr) 56px 48px 52px 68px; }
+.lib-table.compact { --cols: 32px minmax(0, 1fr) minmax(0, 0.42fr) 56px 48px 52px 68px; }
+.lib-table.compact.nofolder { --cols: 32px minmax(0, 1fr) 56px 48px 52px 68px; }
+
+.lib-thead, .lib-row {
+  display: grid; grid-template-columns: var(--cols); align-items: center; gap: 16px;
+  padding-inline: 16px;
+}
+
+.lib-thead {
+  position: sticky; inset-block-start: 0; z-index: 2; height: 40px;
+  background: var(--bg); box-shadow: 0 1px 0 var(--line);
+  font-size: var(--fs-xs); font-weight: 550; color: var(--text-3);
+}
+.lib-th-title { display: flex; gap: 16px; }
+.lib-th {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding-inline: 2px;
+  color: var(--text-3); font-size: var(--fs-xs); font-weight: 550; white-space: nowrap;
+  transition: color var(--t-fast) ease;
+}
+.lib-th svg { width: 14px; height: 14px; }
+.lib-th.on { color: var(--text); }
+
+@media (hover: hover) {
+  .lib-th:hover { color: var(--text); }
+}
+
+/* Column alignment, shared by header and rows. */
+.lib-c-len, .lib-c-bpm { justify-self: end; text-align: end; }
+.lib-c-key { justify-self: center; }
+.lib-c-art { display: grid; place-items: center; }
+.lib-c-acts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+
+.lib-row {
+  height: 64px; border-radius: var(--r-md);
+  content-visibility: auto; contain-intrinsic-size: auto 64px;
+  scroll-margin-block: 44px 8px;
+  user-select: none; cursor: default;
+  transition: background-color var(--t-fast) ease;
+}
+.lib-table.compact .lib-row { height: 40px; contain-intrinsic-size: auto 40px; }
+.lib-row.menu-open { background: var(--raised); }
+.lib-row.sel { background: var(--accent-soft); }
+.lib-row.dragging { opacity: 0.5; }
+.lib-row:focus-visible { outline-offset: -2px; border-radius: var(--r-md); }
+
+.lib-c-title { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; line-height: 1.3; }
+.lib-t1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lib-tt {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-lg); font-weight: 600; color: var(--text);
+}
+.lib-t2, .lib-c-folder {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-sm); color: var(--text-3);
+}
+.lib-fav { flex: none; color: var(--text-2); }
+.lib-row .lib-c-len { font-size: var(--fs-md); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lib-row .lib-c-bpm { font-size: var(--fs-md); color: var(--text); font-variant-numeric: tabular-nums; }
+
+.lib-row.current .lib-tt { color: var(--accent); }
+.lib-row.sel .lib-t2, .lib-row.sel .lib-c-folder { color: var(--text-2); }
+
+/*
+ * Marked for deletion: struck through and quieter, but every text pair still
+ * clears 4.5:1 (--text-3 on --bg is 7.05:1). Only the cover art fades, so the
+ * row reads as "on its way out" without becoming unreadable; a whole-row
+ * opacity of 0.45 would drop the artist line to about 2:1.
+ */
+.lib-row.del .lib-tt { color: var(--text-3); text-decoration: line-through; text-decoration-thickness: from-font; }
+.lib-row.del.sel .lib-tt { color: var(--text-2); }
+.lib-row.del .lib-c-bpm { color: var(--text-3); }
+.lib-row.del .lib-artbtn, .lib-card.del .lib-artbtn { opacity: 0.45; }
+
+/* Compact: one line per track, the play control stands in for the art. */
+.lib-table.compact .lib-c-title { flex-direction: row; align-items: center; gap: 12px; }
+.lib-table.compact .lib-t1 { flex: 0 1 auto; max-width: 65%; }
+.lib-table.compact .lib-tt { font-size: var(--fs-md); }
+.lib-table.compact .lib-t2 { flex: 1 1 0; }
+.lib-table.compact .ui-play { width: 28px; height: 28px; }
+
+/* Cover art as a play button. */
+.lib-artbtn { position: relative; display: grid; border-radius: var(--r-sm); transition: scale var(--t-fast) var(--ease-out); }
+.lib-artbtn:active { scale: 0.96; }
+.lib-artbtn:focus-visible { outline-offset: 2px; border-radius: var(--r-sm); }
+.lib-artplay {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  border-radius: inherit; pointer-events: none;
+  background: color-mix(in oklab, var(--bg) 55%, transparent); color: var(--text);
+  opacity: 0; transition: opacity var(--t-fast) ease;
+}
+.lib-artplay svg { width: 18px; height: 18px; }
+.lib-artbtn.on .lib-artplay, .lib-artbtn:focus-visible .lib-artplay { opacity: 1; }
+
+/*
+ * Row controls that only matter under the pointer. Touch screens have no
+ * hover, so there they simply stay visible.
+ */
+@media (hover: hover) {
+  .lib-row:hover:not(.sel) { background: var(--raised); }
+  .lib-artbtn:hover .lib-artplay { opacity: 1; }
+
+  .lib-more, .lib-table.compact .ui-play {
+    opacity: 0;
+    transition-property: opacity, background-color, color, scale;
+    transition-duration: var(--t-fast); transition-timing-function: ease;
+  }
+  .lib-row:hover .lib-more, .lib-row:focus-within .lib-more,
+  .lib-row.sel .lib-more, .lib-row.menu-open .lib-more,
+  .lib-row:hover .ui-play, .lib-row:focus-within .ui-play, .lib-row.current .ui-play { opacity: 1; }
+}
+
+/* Where the table gets narrow, the folder column goes first. */
+@container lib-main (max-width: 820px) {
+  .lib-table { --cols: 48px minmax(0, 1fr) 56px 48px 52px 68px; }
+  .lib-table.compact { --cols: 32px minmax(0, 1fr) 56px 48px 52px 68px; }
+  .lib-table .lib-c-folder { display: none; }
+}
+
+/* ---------------------------------------------------------------- grid -- */
+
+.lib-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 8px;
+  padding-block: 4px 0; padding-inline: 8px;
+}
+
+/* Card radius 16 = art radius 8 + padding 8, so the corners stay concentric. */
+.lib-card {
+  display: flex; flex-direction: column; min-width: 0;
+  padding: 8px 8px 12px; border-radius: var(--r-xl);
+  content-visibility: auto; contain-intrinsic-size: auto 280px;
+  scroll-margin-block: 8px;
+  user-select: none; cursor: default;
+  transition: background-color var(--t-fast) ease;
+}
+.lib-card.menu-open { background: var(--raised); }
+.lib-card.sel { background: var(--accent-soft); }
+.lib-card.dragging { opacity: 0.5; }
+.lib-card:focus-visible { outline-offset: -2px; border-radius: var(--r-xl); }
+
+.lib-card-art { position: relative; margin-block-end: 10px; }
+.lib-card-art .lib-artbtn { width: 100%; border-radius: var(--r-md); }
+/* Art takes a fixed pixel size inline; the card needs it fluid and square. */
+.lib-card-art .ui-art { width: 100% !important; height: auto !important; aspect-ratio: 1; border-radius: var(--r-md); }
+.lib-card-art .ui-art .ph { font-size: var(--fs-3xl); }
+.lib-card-art .lib-artplay svg { width: 28px; height: 28px; }
+
+.lib-card-tags { position: absolute; inset-block-start: 8px; inset-inline-start: 8px; display: flex; gap: 4px; pointer-events: none; }
+.lib-card .lib-card-tags .ui-tag { background: var(--raised); }
+
+.lib-card-acts { position: absolute; inset-inline-end: 8px; inset-block-end: 8px; display: flex; align-items: center; gap: 6px; }
+.lib-card-acts .ui-add { width: 36px; height: 36px; box-shadow: var(--shadow-pop); }
+.lib-card-acts .ui-add.done { background: var(--raised); }
+.lib-card-acts .lib-more { background: var(--raised); box-shadow: var(--shadow-pop); }
+
+.lib-card-title { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 1.3; }
+.lib-card-title .lib-tt { font-size: var(--fs-lg); }
+.lib-card-artist {
+  min-height: 1.3em; margin-block-start: 2px; line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-sm); color: var(--text-3);
+}
+.lib-card-facts {
+  display: flex; align-items: center; gap: 10px; margin-block-start: 8px;
+  font-size: var(--fs-sm); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.lib-card-facts .len { margin-inline-start: auto; color: var(--text-3); }
+
+.lib-card.current .lib-tt { color: var(--accent); }
+.lib-card.sel .lib-card-artist, .lib-card.sel .lib-card-facts .len { color: var(--text-2); }
+.lib-card.del .lib-tt { color: var(--text-3); text-decoration: line-through; text-decoration-thickness: from-font; }
+.lib-card.del.sel .lib-tt { color: var(--text-2); }
+
+@media (hover: hover) {
+  .lib-card:hover:not(.sel) { background: var(--raised); }
+  .lib-card-acts > * { opacity: 0; transition: opacity var(--t-fast) ease; }
+  .lib-card:hover .lib-card-acts > *, .lib-card:focus-within .lib-card-acts > *,
+  .lib-card.menu-open .lib-card-acts > *, .lib-card.inset .lib-card-acts .ui-add { opacity: 1; }
+}
+
+/* --------------------------------------------------------------- menus -- */
+
+.lib-menu-head {
+  padding: 8px 10px; margin-block-end: 4px;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+.lib-menu-head .t {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-md); font-weight: 600; color: var(--text); line-height: 1.3;
+}
+.lib-menu-head .s { margin-block-start: 2px; font-size: var(--fs-xs); color: var(--text-3); }
+.lib-menu-head.back { display: flex; align-items: center; gap: 6px; padding-block: 4px; padding-inline: 2px 10px; }
+
+.lib-pick { max-height: min(320px, 50vh); overflow-y: auto; overscroll-behavior: contain; }
+.lib-pick .item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-pick .item .hint { font-variant-numeric: tabular-nums; }
+.lib-pick-empty { padding: 10px; font-size: var(--fs-sm); color: var(--text-3); }
+
+.lib-check {
+  display: grid; place-items: center; flex: none; width: 18px; height: 18px;
+  border-radius: var(--r-xs); box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  transition-property: background-color, box-shadow;
+  transition-duration: var(--t-fast); transition-timing-function: ease;
+}
+.lib-check.on { background: var(--accent); box-shadow: none; }
+.lib-check.in { background: var(--control); box-shadow: none; }
+.ui-pop .item .lib-check svg { width: 14px; height: 14px; color: var(--accent-ink); }
+.ui-pop .item .lib-check.in svg { color: var(--text-3); }
+
+.lib-pick-foot {
+  display: flex; gap: 8px; margin-block-start: 4px; padding-block: 8px 2px; padding-inline: 4px;
+  box-shadow: inset 0 1px 0 var(--line);
+}
+.lib-pick-foot .ui-btn { flex: 1 1 0; }
+.lib-pick-foot .ui-btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.lib-pick-foot .ui-btn[aria-disabled="true"]:active { scale: 1; }
+.lib-pick-foot .ui-btn[aria-disabled="true"]:hover { --btn-bg: var(--control); }
+
+/* ---------------------------------------------------------------- drag -- */
+
+.lib-ghost {
+  position: fixed; z-index: var(--z-tooltip); pointer-events: none;
+  display: flex; align-items: center; gap: 12px;
+  padding-block: 8px; padding-inline: 12px; border-radius: var(--r-md);
+  background: var(--control); color: var(--text); box-shadow: var(--shadow-pop), inset 0 0 0 1px var(--accent-line);
+  font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
+}
+.lib-ghost .hint { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-weight: 500; }
+
+/* ------------------------------------------------------------ narrow -- */
+
+@media (max-width: 880px) {
+  .lib { grid-template-columns: 208px minmax(0, 1fr); }
+  .lib-head, .lib-tools { padding-inline: 16px; }
+}
+
+/* Non-sortable column heading, same voice as the sortable ones. */
+.lib-th-plain { font-size: var(--fs-xs); font-weight: 550; color: var(--text-3); padding-inline: 4px; }
+.lib-pick-search { height: 32px; margin: 2px 4px 6px; }
+/* Where a dragged playlist will land: a coral line on the near edge. */
+.lib-nav.ins-before { box-shadow: inset 0 2px 0 var(--accent); }
+.lib-nav.ins-after { box-shadow: inset 0 -2px 0 var(--accent); }

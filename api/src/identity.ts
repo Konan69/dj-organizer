@@ -3,7 +3,7 @@
  *
  * Paths are not identity: the same recording sits at several paths, gets
  * renamed, and moves between folders. Dates are not identity either — mtimes
- * change when a tool rewrites tags, and Serato rewrites crates on exit.
+ * change when a tool rewrites tags.
  *
  * So identity is resolved in this order:
  *   1. contentHash  — xxHash64 over the audio payload (tag edits don't move it)
@@ -11,7 +11,7 @@
  *   3. (duration rounded to 1s, normalized title) — last-resort fuzzy key
  *
  * The audio payload is hashed rather than the whole file so that rewriting
- * metadata (which yt-dlp, Serato and rekordbox all do) does not change a
+ * metadata (which yt-dlp and rekordbox can do) does not change a
  * track's identity.
  */
 import { open } from "node:fs/promises";

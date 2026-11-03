@@ -1,0 +1,300 @@
+/*
+ * Set view: the running order on the leading side, "what comes next" in a
+ * 380px panel on the trailing side. Tokens from theme.css only.
+ */
+
+.sv { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; }
+
+/* ------------------------------------------------------------ main -- */
+
+.sv-main {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+  container: sv-main / inline-size;
+}
+
+.sv-head {
+  flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px;
+  padding-block: 24px 16px; padding-inline: 28px;
+}
+.sv-head-text { min-width: 0; }
+.sv-name {
+  font-size: var(--fs-3xl); font-weight: 650; line-height: 1.15; letter-spacing: -0.015em;
+  text-wrap: balance; overflow-wrap: break-word;
+}
+.sv-meta { margin-block-start: 4px; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sv-skel-name { display: block; width: 220px; height: 26px; }
+.sv-actions { flex: none; display: flex; align-items: center; gap: 12px; }
+
+/* Save / error banner: calm, inline, with its own actions. */
+.sv-banner {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  margin-inline: 28px; margin-block-end: 12px; padding-block: 6px; padding-inline: 16px 6px; min-height: 44px;
+  border-radius: var(--r-lg); background: var(--raised); color: var(--text-2); font-size: var(--fs-md);
+}
+.sv-banner > .ui-dot { color: var(--warn); }
+.sv-banner.error > .ui-dot { color: var(--danger); }
+.sv-banner-text { flex: 1; min-width: 0; line-height: 1.45; text-wrap: pretty; }
+.sv-banner-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+
+.sv-scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
+  padding-block: 4px 48px; padding-inline: 16px;
+}
+.sv-scroll > .ui-empty { padding-block: 96px; }
+.sv-list { list-style: none; }
+
+/* -------------------------------------------------------------- rows -- */
+
+/* handle · index · art · title · key · bpm · length · menu */
+.sv-row {
+  position: relative;
+  display: grid; grid-template-columns: 16px 24px 52px minmax(0, 1fr) 44px 48px 48px 34px;
+  align-items: center; column-gap: 12px;
+  min-height: 72px; padding-inline: 4px 8px; border-radius: var(--r-lg);
+  user-select: none; /* rows are drag surfaces */
+  transition: background-color var(--t-fast) ease, opacity var(--t-fast) ease;
+}
+/* Selected: raised surface plus an accent hairline, like DJ.Studio. Not --n-4:
+   key badges (3.46:1) and danger tags (2.99:1) fail on it. */
+.sv-row.selected { background: var(--raised); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.sv-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-lg); }
+.sv-row.dragging { opacity: 0.45; }
+
+.sv-handle {
+  display: grid; place-items: center; height: 40px;
+  color: var(--text-3); cursor: grab; opacity: 0;
+  transition: opacity var(--t-fast) ease;
+}
+.sv-row:focus-within .sv-handle, .sv-row.selected .sv-handle { opacity: 1; }
+
+.sv-index { text-align: end; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.sv-art-missing { width: 52px; height: 52px; }
+.sv-row.current .ui-art { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.sv-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sv-title, .sv-artist, .sv-note {
+  min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sv-title { font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; color: var(--text); }
+.sv-row.current .sv-title { color: var(--accent); }
+.sv-row.missing .sv-title { color: var(--text-2); }
+.sv-artist { font-size: var(--fs-sm); line-height: 1.35; color: var(--text-3); }
+.sv-sub { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* The theme's danger tag drops to 4.14:1 on hover surfaces; an opaque fill keeps 5.16:1 everywhere. */
+.sv .ui-tag.danger { background: color-mix(in oklab, var(--danger) 16%, var(--surface)); }
+.sv-note {
+  align-self: flex-start; font-size: var(--fs-sm); line-height: 1.35;
+  color: var(--text-3); text-align: start; border-radius: var(--r-xs);
+  text-decoration: underline dotted transparent; text-underline-offset: 3px;
+  transition: color var(--t-fast) ease, text-decoration-color var(--t-fast) ease;
+}
+
+.sv-row .ui-key { justify-self: center; }
+.sv-bpm { text-align: end; font-size: var(--fs-md); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sv-len { text-align: end; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.sv-more { opacity: 0; transition: opacity var(--t-fast) ease, background-color var(--t-fast) ease, color var(--t-fast) ease; }
+.sv-row:focus-within .sv-more, .sv-row.selected .sv-more, .sv-more[aria-expanded="true"] { opacity: 1; }
+
+/* Drop position while dragging: a clear accent line between rows. */
+.sv-row.drop-before::before, .sv-row.drop-after::after {
+  content: ""; position: absolute; inset-inline: 4px; height: 2px;
+  border-radius: var(--r-pill); background: var(--accent); pointer-events: none;
+}
+.sv-row.drop-before::before { top: -1px; }
+.sv-row.drop-after::after { bottom: -1px; }
+
+/* Inline note editor, lined up under the art column. */
+.sv-note-edit { padding-block: 4px 8px; padding-inline: 68px 8px; }
+.sv-note-edit .ui-field { max-width: 560px; }
+.sv-note-edit .ui-field > span { flex: none; font-size: var(--fs-sm); color: var(--text-3); }
+
+/* ------------------------------------------------------- connectors -- */
+
+/* Starts under the art (4 + 16 + 12 + 24 + 12 = 68px in). */
+.sv-conn {
+  display: flex; align-items: center; gap: 12px; overflow: hidden;
+  width: calc(100% - 68px); min-height: 40px; margin-inline-start: 68px; padding-inline-end: 8px;
+  border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-sm); text-align: start;
+  transition: background-color var(--t-fast) ease;
+}
+.sv-conn:active { background: var(--control); }
+.sv-conn:focus-visible { outline-offset: -2px; border-radius: var(--r-md); }
+.sv-conn-icon { flex: none; width: 52px; display: grid; place-items: center; color: var(--text-3); }
+.sv-conn-keys { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sv-conn .ui-tag { flex: none; }
+.sv-conn-tempo { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sv-conn-tempo.far { color: var(--warn); }
+/* Planned transition as a neutral chip; an empty slot when nothing is planned. */
+.sv-plan { font-variant-numeric: tabular-nums; }
+.sv-plan.none { background: none; color: var(--text-3); box-shadow: inset 0 0 0 1px var(--line-strong); }
+
+.sv-rehearsal { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; }
+.sv-rehearsal .ui-dot { width: 8px; height: 8px; }
+.sv-rehearsal.not-tried .ui-dot { color: var(--text-3); background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+.sv-rehearsal.needs-work .ui-dot { color: var(--warn); }
+.sv-rehearsal.works { color: var(--ok); }
+
+.sv-conn-note { flex: none; display: inline-grid; place-items: center; color: var(--text-3); }
+.sv-conn-go {
+  flex: none; display: inline-grid; place-items: center; margin-inline-start: auto;
+  color: var(--text-2); opacity: 0; transition: opacity var(--t-fast) ease;
+}
+.sv-conn-go svg:dir(rtl) { rotate: 180deg; }
+.sv-conn:focus-visible .sv-conn-go { opacity: 1; }
+
+@media (hover: hover) {
+  .sv-row:hover:not(.selected) { background: var(--raised); }
+  .sv-row:hover .sv-handle, .sv-row:hover .sv-more { opacity: 1; }
+  .sv-note:hover { color: var(--text-2); text-decoration-color: currentColor; }
+  .sv-conn:hover { background: var(--raised); }
+  .sv-conn:hover .sv-conn-go { opacity: 1; }
+}
+
+/* Length is the first column to give when the list gets narrow. */
+@container sv-main (max-width: 640px) {
+  .sv-row { grid-template-columns: 16px 24px 52px minmax(0, 1fr) 44px 48px 34px; }
+  .sv-len { display: none; }
+}
+
+/* Loading placeholders in the shape of rows. */
+.sv-skel-row {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; column-gap: 12px;
+  min-height: 72px; padding-inline-start: 68px;
+}
+.sv-skel-row .a { width: 52px; height: 52px; }
+.sv-skel-row .t { display: flex; flex-direction: column; gap: 8px; }
+.sv-skel-row .t span { height: 12px; }
+.sv-skel-row .t span:first-child { width: 42%; }
+.sv-skel-row .t span:last-child { width: 26%; }
+
+/* ------------------------------------------------------------- menus -- */
+
+.sv-flip { rotate: 180deg; }
+.ui-pop .sv-export .item { align-items: flex-start; min-height: 0; padding-block: 8px; }
+.ui-pop .sv-export .item svg { margin-block-start: 2px; }
+.ui-pop .sv-export a.item { text-decoration: none; }
+.ui-pop .sv-export .item[aria-disabled="true"] { color: var(--text-4); background: none; cursor: default; }
+.sv-export-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sv-export-text small { font-size: var(--fs-xs); line-height: 1.4; color: var(--text-3); }
+
+/* ------------------------------------------------------------- panel -- */
+
+.sv-panel {
+  flex: none; width: 380px; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 32px;
+  padding-block: 24px 40px; padding-inline: 20px;
+  background: var(--surface); border-inline-start: 1px solid var(--line);
+}
+.sv-sec { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sv-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+.sv-sec-head > div { min-width: 0; }
+.sv-sec-title { font-size: var(--fs-sm); font-weight: 600; line-height: 1.3; color: var(--text-2); }
+.sv-after { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); color: var(--text-3); }
+.sv-after b { font-weight: 550; color: var(--text-2); }
+.sv-quiet { font-size: var(--fs-sm); color: var(--text-3); }
+
+.sv-prefs { display: flex; flex-direction: column; gap: 10px; }
+.sv-prefs .ui-seg { display: flex; }
+.sv-prefs .ui-seg button { flex: 1 1 0; justify-content: center; padding-inline: 8px; }
+
+/* On/off switch: accent-soft track so it never competes with the primary action. */
+.sv-switch {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 10px; min-height: 28px;
+  border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--text-2);
+  transition: color var(--t-fast) ease;
+}
+.sv-switch-track {
+  position: relative; flex: none; width: 30px; height: 18px; border-radius: var(--r-pill);
+  background: var(--control-hover); transition: background-color var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+.sv-switch-knob {
+  position: absolute; top: 3px; inset-inline-start: 3px; width: 12px; height: 12px;
+  border-radius: var(--r-pill); background: var(--text-2);
+  transition: translate var(--t-med) var(--ease-out), background-color var(--t-fast) ease;
+}
+.sv-switch[aria-checked="true"] .sv-switch-track { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.sv-switch[aria-checked="true"] .sv-switch-knob { translate: 12px 0; background: var(--accent); }
+.sv-switch[aria-checked="true"]:dir(rtl) .sv-switch-knob { translate: -12px 0; }
+
+/* Candidates: art, title over artist, compat tag, key, BPM, add. Reasons are tooltips. */
+.sv-cands { list-style: none; display: flex; flex-direction: column; gap: 2px; margin-inline: -8px; }
+.sv-cands[aria-busy="true"] { opacity: 0.6; transition: opacity var(--t-med) ease; }
+.sv-cand {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto 30px 30px; align-items: center; column-gap: 10px;
+  padding: 8px; border-radius: var(--r-md);
+  transition: background-color var(--t-fast) ease;
+}
+.sv-cand-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sv-cand-title, .sv-cand-artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-cand-title { font-size: var(--fs-md); font-weight: 600; line-height: 1.3; }
+.sv-cand.current .sv-cand-title { color: var(--accent); }
+.sv-cand.current .ui-art { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sv-cand-artist { font-size: var(--fs-sm); line-height: 1.35; color: var(--text-3); }
+.sv-cand-why { display: flex; margin-block-start: 4px; }
+.sv-cand-bpm { text-align: end; font-size: var(--fs-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sv-cand-skels { display: flex; flex-direction: column; gap: 6px; }
+.sv-cand-skel { height: 60px; }
+
+/* AI steering. */
+.sv-steer-row { display: flex; gap: 8px; }
+.sv-steer-row .ui-field { flex: 1 1 auto; min-width: 0; }
+
+.sv-link {
+  align-self: flex-start; font-size: var(--fs-sm); color: var(--text-2); border-radius: var(--r-xs);
+  text-decoration: underline; text-decoration-color: var(--line-strong);
+  text-decoration-thickness: from-font; text-underline-offset: 3px;
+  transition: color var(--t-fast) ease, text-decoration-color var(--t-fast) ease;
+}
+
+/* The shared OpenRouter form, dressed in the design-system controls. */
+.sv-ai-setup .or-settings { gap: 10px; padding: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-2); }
+.sv-ai-setup .or-settings code { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text); }
+.sv-ai-setup .or-settings-row { flex-wrap: nowrap; gap: 8px; }
+.sv-ai-setup .or-settings-row input {
+  flex: 1 1 auto; min-width: 0; height: 36px; padding-inline: 12px; border: 0; outline: 0;
+  border-radius: var(--r-md); background: var(--raised); color: var(--text); font-size: var(--fs-md);
+  box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow var(--t-fast) ease;
+}
+.sv-ai-setup .or-settings-row input:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.sv-ai-setup .or-settings-row input::placeholder { color: var(--text-3); }
+.sv-ai-setup .or-settings-row button {
+  flex: none; height: 36px; padding-inline: 14px; border-radius: var(--r-md);
+  background: var(--control); color: var(--text); font-weight: 550;
+  transition: background-color var(--t-fast) ease, scale var(--t-fast) var(--ease-out);
+}
+.sv-ai-setup .or-settings-row button:active:not(:disabled) { scale: 0.96; }
+.sv-ai-setup .or-settings-row button:disabled { opacity: 0.45; }
+.sv-ai-setup .or-settings-row .danger { color: var(--danger); }
+.sv-ai-setup .or-settings small { font-size: var(--fs-xs); color: var(--text-3); }
+.sv-ai-setup .or-settings-message { font-size: var(--fs-xs); color: var(--text-2); }
+
+.sv-panel .ui-textarea { min-height: 120px; }
+
+/* Before-you-play checks: dot, track, what's missing. The fix is the tooltip. */
+.sv-checks { list-style: none; display: flex; flex-direction: column; gap: 2px; margin-inline: -8px; }
+.sv-check {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding-inline: 8px;
+  border-radius: var(--r-md); text-align: start; font-size: var(--fs-sm); color: var(--text-2);
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease;
+}
+.sv-check:active:not(:disabled) { background: var(--control); }
+.sv-check .ui-dot { color: var(--warn); }
+.sv-check.danger .ui-dot { color: var(--danger); }
+.sv-check-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-check-issue { flex: none; white-space: nowrap; color: var(--text-3); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .sv-spin { animation: sv-spin 0.8s linear infinite; }
+}
+@keyframes sv-spin { to { rotate: 360deg; } }
+
+@media (hover: hover) {
+  .sv-cand:hover { background: var(--raised); }
+  .sv-switch:hover { color: var(--text); }
+  .sv-check:hover:not(:disabled) { background: var(--raised); color: var(--text); }
+  .sv-link:hover { color: var(--text); text-decoration-color: currentColor; }
+  .sv-ai-setup .or-settings-row input:hover { box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .sv-ai-setup .or-settings-row button:hover:not(:disabled) { background: var(--control-hover); }
+}

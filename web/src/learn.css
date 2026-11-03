@@ -1,0 +1,164 @@
+/* Learn — the video queue. The view fills the space the shell gives it and
+   owns its scrolling: the header and filters stay put, the list and the
+   open video each scroll on their own. */
+
+.lrn { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+/* ---------- header ---------- */
+.lrn-top {
+  display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 16px 24px;
+  flex: none; padding-block: 24px 16px; padding-inline: 24px;
+}
+.lrn-heading { min-width: 0; }
+.lrn-heading h1 { font-size: var(--fs-3xl); font-weight: 650; line-height: 1.15; letter-spacing: -0.015em; }
+.lrn-heading p { margin-block-start: 4px; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.lrn-add { display: flex; gap: 8px; width: min(440px, 100%); }
+.lrn-add .ui-field { flex: 1; min-width: 0; }
+
+.lrn-filters {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  flex: none; padding-block: 0 16px; padding-inline: 24px;
+}
+.lrn-find { width: 220px; margin-inline-start: auto; }
+
+/* ---------- list and pane ---------- */
+/* The list stands alone until something is open; then it narrows to a
+   column and the player takes the room, because at that point the list is a
+   way back. */
+.lrn-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.lrn-split.opened { grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); }
+
+/* 4px of top padding keeps the first row's focus ring inside the scroller. */
+.lrn-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-block: 4px 24px; padding-inline: 24px; }
+.lrn-split.opened .lrn-list { padding-inline-end: 12px; }
+
+/* Cards carry their own 8px inset, so the grid pulls back by the same amount
+   and thumbnails line up with the header above. */
+.lrn-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 8px; margin-inline: -8px;
+}
+.lrn-split.opened .lrn-grid { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+
+/* ---------- card ---------- */
+/* Radius is concentric: 16px card = 8px thumbnail + 8px inset. */
+.lrn-card {
+  display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0;
+  padding: 8px; padding-block-end: 12px; border-radius: var(--r-xl);
+  text-align: start; color: var(--text);
+  transition: background-color var(--t-fast) ease;
+}
+.lrn-card.on { background: var(--raised); }
+.lrn-card:focus-visible { border-radius: var(--r-xl); }
+.lrn-split.opened .lrn-card {
+  display: grid; grid-template-columns: 136px minmax(0, 1fr); align-items: start; gap: 12px;
+  padding-block-end: 8px;
+}
+@media (hover: hover) {
+  .lrn-card:hover { background: var(--raised); }
+}
+
+.lrn-thumb {
+  position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+  border-radius: var(--r-md); background: var(--control);
+  outline: 1px solid var(--line); outline-offset: -1px;
+}
+.lrn-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.lrn-thumb .ph { position: absolute; inset: 0; margin: auto; width: 28px; height: 28px; color: var(--text-3); }
+.lrn-thumb .fill { position: absolute; inset: 0; border-radius: 0; }
+.lrn-card.on .lrn-thumb { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lrn-card.st-skipped .lrn-thumb img { opacity: 0.45; }
+.lrn-thumb .len {
+  position: absolute; inset-inline-end: 6px; inset-block-end: 7px;
+  padding-inline: 6px; border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--surface) 85%, transparent); color: var(--text);
+  font-size: var(--fs-xs); font-weight: 550; line-height: 20px; font-variant-numeric: tabular-nums;
+}
+.lrn-thumb .prog {
+  position: absolute; inset-inline: 0; inset-block-end: 0; height: 3px;
+  background: color-mix(in oklab, var(--surface) 70%, transparent);
+}
+.lrn-thumb .prog i { display: block; height: 100%; background: var(--accent); }
+
+/* Block, not flex: a flex item's display is blockified, and a blockified
+   -webkit-box stops clamping at two lines and cuts the title after one. */
+.lrn-card-txt { display: block; min-width: 0; padding-inline: 2px; }
+/* Deliberately not .t1/.t2/.tag: other screens own those names. Titles wrap
+   to two lines before clamping; the full title is in the tooltip. */
+.lrn-card .ttl {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  font-size: var(--fs-lg); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; text-wrap: pretty;
+}
+.lrn-card.st-done .ttl, .lrn-card.st-skipped .ttl { color: var(--text-2); }
+.lrn-card .sub {
+  display: block; margin-block-start: 4px; font-size: var(--fs-sm); color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lrn-card .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-block-start: 8px; }
+.lrn-card .tags .ui-tag { font-variant-numeric: tabular-nums; }
+.lrn-card .tags svg { width: 12px; height: 12px; }
+
+.lrn-card.skel { pointer-events: none; }
+.lrn-card .sk-a, .lrn-card .sk-b { display: block; border-radius: var(--r-xs); }
+.lrn-card .sk-a { width: 85%; height: 14px; margin-block-start: 3px; }
+.lrn-card .sk-b { width: 50%; height: 12px; margin-block-start: 10px; }
+
+/* ---------- the open video ---------- */
+/* Radius is concentric: 16px pane = 8px video + 8px inset. */
+.lrn-pane {
+  min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  margin-block: 0 24px; margin-inline: 4px 24px; padding: 8px;
+  border-radius: var(--r-xl); background: var(--surface);
+}
+/* Keeps the whole video in view on tall-and-wide screens: the column is only
+   as wide as a 16:9 frame that fits the height left under the header. */
+.lrn-pane-in {
+  display: flex; flex-direction: column; gap: 8px;
+  width: 100%; max-width: max(560px, calc((100vh - 320px) * 16 / 9)); margin-inline: auto;
+}
+.lrn-stage {
+  width: 100%; aspect-ratio: 16 / 9; overflow: hidden; flex: none;
+  border-radius: var(--r-md); background: var(--raised);
+}
+.lrn-stage iframe { display: block; width: 100%; height: 100%; border: 0; }
+.lrn-err {
+  display: flex; align-items: center; gap: 8px;
+  padding-block: 10px; padding-inline: 12px; border-radius: var(--r-md);
+  background: var(--danger-soft); color: var(--danger); font-size: var(--fs-sm);
+}
+.lrn-err svg { flex: none; width: 16px; height: 16px; }
+
+.lrn-detail { display: flex; flex-direction: column; gap: 20px; padding-block: 8px 12px; padding-inline: 8px; }
+.lrn-head { display: flex; align-items: flex-start; gap: 4px; }
+.lrn-ttl { flex: 1; min-width: 0; padding-inline-end: 8px; }
+.lrn-ttl h2 { font-size: var(--fs-xl); font-weight: 650; line-height: 1.3; letter-spacing: -0.01em; overflow-wrap: anywhere; text-wrap: balance; }
+.lrn-ttl p { margin-block-start: 4px; font-size: var(--fs-sm); color: var(--text-3); }
+
+.lrn-block { display: flex; flex-direction: column; gap: 8px; }
+.lrn-block h3 { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.lrn-block h3 label { cursor: pointer; }
+
+.lrn-chapters {
+  display: flex; flex-direction: column; margin-inline: -8px;
+  max-height: 300px; overflow-y: auto; overscroll-behavior: contain;
+}
+.lrn-chap {
+  display: flex; align-items: baseline; gap: 12px; min-height: 36px;
+  padding-block: 8px; padding-inline: 8px; border-radius: var(--r-md);
+  text-align: start; font-size: var(--fs-md); color: var(--text-2);
+  transition: background-color var(--t-fast) ease, color var(--t-fast) ease;
+}
+.lrn-chap:focus-visible { outline-offset: -2px; border-radius: var(--r-md); }
+.lrn-chap .t { flex: none; width: 56px; font-size: var(--fs-sm); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.lrn-chap .n { min-width: 0; overflow-wrap: anywhere; }
+@media (hover: hover) {
+  .lrn-chap:hover { background: var(--raised); color: var(--text); }
+}
+/* Two classes: learn.css loads before theme.css, so .ui-textarea would win a tie. */
+.lrn-block .lrn-notes { min-height: 140px; }
+
+@media (max-width: 1080px) {
+  .lrn-split.opened { grid-template-columns: minmax(0, 1fr); }
+  .lrn-split.opened .lrn-list { display: none; }
+  .lrn-pane { margin-inline: 24px; }
+}

@@ -1,8 +1,8 @@
 /**
  * Files never move on disk. Genre folders are storage; playlists are metadata.
- * The app makes no filesystem mutation at all outside its own data/ directory:
- * no crate write, no rename, no move, no delete. Everything it decides leaves
- * as a plan the user applies by hand.
+ * Outside data/, the downloader may only add folders and new files. There is no
+ * external-store write, overwrite, rename, move, or delete; every destructive decision
+ * leaves as a plan the user applies by hand.
  */
 import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS tracks(
   added_at INTEGER, missing INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS ix_tracks_vid ON tracks(video_id);
 CREATE INDEX IF NOT EXISTS ix_tracks_missing ON tracks(missing);
+
+CREATE TABLE IF NOT EXISTS track_overrides(
+  track_hash TEXT PRIMARY KEY, title TEXT, artist TEXT, at INTEGER);
 
 CREATE TABLE IF NOT EXISTS playlists(
   id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, sort INTEGER DEFAULT 0,
@@ -46,18 +49,48 @@ CREATE TABLE IF NOT EXISTS ytm_playlists(
 CREATE TABLE IF NOT EXISTS ytm_tracks(
   ytm_id TEXT NOT NULL, video_id TEXT, title TEXT, artist TEXT, sort INTEGER,
   PRIMARY KEY(ytm_id, video_id));
+CREATE TABLE IF NOT EXISTS ytm_staged(
+  video_id TEXT PRIMARY KEY, ytm_id TEXT, local_playlist TEXT, title TEXT,
+  artist TEXT, status TEXT DEFAULT 'pending'
+    CHECK(status IN ('pending','approved','rejected','downloaded')),
+  flags TEXT, staged_at INTEGER);
+CREATE INDEX IF NOT EXISTS ix_ytm_staged_playlist ON ytm_staged(local_playlist);
+CREATE INDEX IF NOT EXISTS ix_ytm_staged_status ON ytm_staged(status);
+-- An upstream video whose playlist slot is held by another track (an extended
+-- mix of it). Upstream sync places the replacement wherever the video appears.
+CREATE TABLE IF NOT EXISTS track_replacements(
+  video_id TEXT PRIMARY KEY, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE);
 
 -- Raw observation of an external store at a point in time. Never mutated:
 -- these are the evidence a diff is computed against, so a stale rekordbox or a
--- crate Serato rewrote on exit is visible as drift rather than silently assumed.
+-- filesystem observation is visible as drift rather than silently assumed.
 CREATE TABLE IF NOT EXISTS observations(
   id INTEGER PRIMARY KEY, store TEXT NOT NULL, observed_at INTEGER NOT NULL,
   tracks INTEGER, playlists INTEGER, digest TEXT, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_obs_store ON observations(store, observed_at DESC);
 
+-- The learning queue. The library is what he plays; this is what he watches to
+-- get better at playing it. Keyed by YouTube id because that is the only
+-- identifier a video keeps across playlists, re-uploads of the URL, and notes
+-- written months apart.
+CREATE TABLE IF NOT EXISTS learn_videos(
+  video_id TEXT PRIMARY KEY, title TEXT NOT NULL, channel TEXT, duration INTEGER,
+  kind TEXT NOT NULL DEFAULT 'tutorial' CHECK(kind IN ('tutorial','set')),
+  topic TEXT,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK(status IN ('queued','watching','done','skipped')),
+  notes TEXT NOT NULL DEFAULT '',
+  -- yt-dlp chapter list, cached so the pane can offer jump points offline.
+  chapters TEXT,
+  -- Seconds into the video, so "go through it" survives closing the tab.
+  position INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER DEFAULT 0, added_at INTEGER, watched_at INTEGER);
+CREATE INDEX IF NOT EXISTS ix_learn_status ON learn_videos(status);
+CREATE INDEX IF NOT EXISTS ix_learn_kind ON learn_videos(kind);
+
 -- Append-only, replayable intent log.
 -- Deliberately keyed by content hash + playlist NAME rather than internal ids,
--- so the same op can be replayed against the filesystem, Serato or rekordbox.
+-- so the same op can be replayed against the filesystem or rekordbox.
 CREATE TABLE IF NOT EXISTS ops(
   id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL,
   playlist TEXT, to_playlist TEXT,
@@ -74,6 +107,14 @@ for (const [table, col, decl] of [
   ["tracks", "content_hash", "TEXT"],
   ["tracks", "hash_scope", "TEXT"],
   ["tracks", "hashed_at", "INTEGER"],
+  ["tracks", "favorite", "INTEGER DEFAULT 0"],
+  // YouTube's own reported track count, which is NOT the number of tracks we
+  // keep (unavailable entries get dropped, so `count` runs a few lower).
+  // Stored separately from fetched rows so the upstream reported total stays
+  // visible when unavailable entries are dropped.
+  ["ytm_playlists", "track_count", "INTEGER"],
+  // Greyed out upstream (deleted/blocked): staged with an `unavailable` flag.
+  ["ytm_tracks", "unavailable", "INTEGER DEFAULT 0"],
 ] as const) {
   const cols = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
@@ -86,6 +127,7 @@ export type TrackRow = {
   genre: string | null; duration: number | null; bitrate: number | null;
   size: number | null; video_id: string | null; added_at: number; missing: number;
   content_hash: string | null; hash_scope: string | null; hashed_at: number | null;
+  favorite: number;
 };
 
 export type PlaylistRow = {

@@ -1,9 +1,8 @@
 /**
- * Observing the three stores that hold this library.
+ * Observing the two stores that hold this library.
  *
  *   fs         the audio files themselves  — the only complete set of content,
  *              but it cannot express membership (a file lives in one folder)
- *   serato     .crate files                — rewritten by Serato on exit
  *   rekordbox  master.db                   — the user's primary, and the one
  *              most prone to drift (it keeps rows for files long since moved)
  *
@@ -13,11 +12,10 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { db, log, now } from "./db";
-import { LIB, RBX_DB } from "./paths";
+import { LIB, pathKey, RBX_DB } from "./paths";
 import { py } from "./py";
-import * as serato from "./serato";
 
-export type StoreName = "fs" | "serato" | "rekordbox";
+export type StoreName = "fs" | "rekordbox";
 
 export type ObservedTrack = {
   path: string;
@@ -26,21 +24,71 @@ export type ObservedTrack = {
   videoId: string | null;
 };
 
+export type RekordboxTrack = {
+  sourceId: string;
+  path: string;
+  title: string | null;
+  artist: string | null;
+  bpm: number | null;
+  key: string | null;
+  comment: string | null;
+  analysisDataPath: string | null;
+  cues: RekordboxCue[];
+  trackNo: number | null;
+  fileSize: number | null;
+  bitRate: number | null;
+  length: number | null;
+};
+
+export type RekordboxCue = {
+  id: string;
+  time: number;
+  endTime: number | null;
+  kind: "hot" | "memory";
+  index: number | null;
+  rawKind: number;
+  label: string;
+  comment: string | null;
+};
+
+export type RekordboxAnalysis = {
+  status: "ready" | "partial" | "missing";
+  source: "rekordbox";
+  beats: { time: number; beat: number; bpm: number }[];
+  phrases: { start: number; end: number; label: string; kind: number; mood: number }[];
+  waveform: { samples: number[]; source: "PWAV" } | null;
+  issues: string[];
+  observedAt: number;
+};
+
+export type RekordboxPlaylist = {
+  sourceId: string;
+  name: string;
+  parentSourceId: string | null;
+  sort: number | null;
+  members: { sourceId: string; trackSourceId: string; position: number | null }[];
+};
+
 export type Observation = {
   store: StoreName;
   observedAt: number;
   available: boolean;
   reason?: string;
-  /** playlist / crate / folder name -> member paths */
+  /** playlist / folder name -> member paths */
   groups: Record<string, string[]>;
   /** every distinct path the store references */
   paths: string[];
   /** paths the store references that do not exist on disk */
   dangling: string[];
+  /** Rich records are present for Rekordbox snapshots and absent for fs. */
+  tracks?: RekordboxTrack[];
+  playlists?: RekordboxPlaylist[];
 };
 
 const AUDIO = new Set([".m4a", ".webm", ".mp3", ".wav", ".aiff", ".flac"]);
-const SKIP = new Set(["_TRASH", "_Serato_", "_Serato_Backup", "PioneerDJ", "rekordbox"]);
+const SKIP = new Set(["_TRASH", "PioneerDJ", "rekordbox"]);
+const uniquePaths = (paths: string[]) =>
+  [...new Map(paths.map((path) => [pathKey(path), path])).values()];
 
 function* walk(dir: string): Generator<string> {
   let entries;
@@ -66,25 +114,67 @@ export function observeFs(): Observation {
   return { store: "fs", observedAt: now(), available: true, groups, paths, dangling: [] };
 }
 
-export function observeSerato(): Observation {
-  const groups = serato.readAll();
-  const paths = [...new Set(Object.values(groups).flat())];
-  return {
-    store: "serato",
-    observedAt: now(),
-    available: Object.keys(groups).length > 0,
-    groups,
-    paths,
-    dangling: paths.filter((p) => !existsSync(p)),
-  };
-}
-
 type RbxDump = {
   error?: string;
   running?: boolean;
   playlists?: Record<string, string[]>;
   content?: string[];
+  tracks?: unknown[];
+  playlistRecords?: unknown[];
 };
+
+const textOrNull = (value: unknown) => typeof value === "string" && value.trim() ? value : null;
+const finiteOrNull = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
+const bpmOrNull = (value: unknown) => {
+  const bpm = finiteOrNull(value);
+  return bpm !== null && bpm >= 20 && bpm <= 300 ? bpm : null;
+};
+
+function parseTracks(rows: unknown[] | undefined): RekordboxTrack[] {
+  return (rows ?? []).flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const r = raw as Record<string, unknown>;
+    if (typeof r.sourceId !== "string" || typeof r.path !== "string") return [];
+    const cues = Array.isArray(r.cues) ? r.cues.flatMap((rawCue): RekordboxCue[] => {
+      if (!rawCue || typeof rawCue !== "object") return [];
+      const cue = rawCue as Record<string, unknown>;
+      const time = finiteOrNull(cue.time);
+      if (typeof cue.id !== "string" || time === null || time < 0
+        || (cue.kind !== "hot" && cue.kind !== "memory") || typeof cue.label !== "string") return [];
+      const endTime = finiteOrNull(cue.endTime);
+      const index = finiteOrNull(cue.index);
+      const rawKind = finiteOrNull(cue.rawKind);
+      if (rawKind === null || !Number.isInteger(rawKind)) return [];
+      return [{ id: cue.id, time, endTime: endTime !== null && endTime >= 0 ? endTime : null,
+        kind: cue.kind, index: index !== null && Number.isInteger(index) ? index : null,
+        rawKind, label: cue.label, comment: textOrNull(cue.comment) }];
+    }) : [];
+    return [{
+      sourceId: r.sourceId, path: r.path, title: textOrNull(r.title),
+      artist: textOrNull(r.artist), bpm: bpmOrNull(r.bpm), key: textOrNull(r.key),
+      comment: textOrNull(r.comment), analysisDataPath: textOrNull(r.analysisDataPath), cues,
+      trackNo: finiteOrNull(r.trackNo),
+      fileSize: finiteOrNull(r.fileSize), bitRate: finiteOrNull(r.bitRate),
+      length: finiteOrNull(r.length),
+    }];
+  });
+}
+
+function parsePlaylists(rows: unknown[] | undefined): RekordboxPlaylist[] {
+  return (rows ?? []).flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const r = raw as Record<string, unknown>;
+    if (typeof r.sourceId !== "string" || typeof r.name !== "string") return [];
+    const members = Array.isArray(r.members) ? r.members.flatMap((rawMember) => {
+      if (!rawMember || typeof rawMember !== "object") return [];
+      const m = rawMember as Record<string, unknown>;
+      if (typeof m.sourceId !== "string" || typeof m.trackSourceId !== "string") return [];
+      return [{ sourceId: m.sourceId, trackSourceId: m.trackSourceId, position: finiteOrNull(m.position) }];
+    }) : [];
+    return [{ sourceId: r.sourceId, name: r.name,
+      parentSourceId: textOrNull(r.parentSourceId), sort: finiteOrNull(r.sort), members }];
+  });
+}
 
 export async function observeRekordbox(): Promise<Observation> {
   const base = { store: "rekordbox" as const, observedAt: now(), groups: {}, paths: [], dangling: [] };
@@ -99,7 +189,7 @@ export async function observeRekordbox(): Promise<Observation> {
   if (dump.error) return { ...base, available: false, reason: dump.error };
 
   const groups = dump.playlists ?? {};
-  const paths = [...new Set([...(dump.content ?? []), ...Object.values(groups).flat()])];
+  const paths = uniquePaths([...(dump.content ?? []), ...Object.values(groups).flat()]);
   return {
     store: "rekordbox",
     observedAt: now(),
@@ -107,13 +197,15 @@ export async function observeRekordbox(): Promise<Observation> {
     groups,
     paths,
     dangling: paths.filter((p) => !existsSync(p)),
+    tracks: parseTracks(dump.tracks),
+    playlists: parsePlaylists(dump.playlistRecords),
   };
 }
 
 export async function observeAll(): Promise<Record<StoreName, Observation>> {
-  const [fs, ser, rbx] = [observeFs(), observeSerato(), await observeRekordbox()];
-  for (const o of [fs, ser, rbx]) record(o);
-  return { fs, serato: ser, rekordbox: rbx };
+  const [fs, rbx] = [observeFs(), await observeRekordbox()];
+  for (const o of [fs, rbx]) record(o);
+  return { fs, rekordbox: rbx };
 }
 
 /** Persist an observation verbatim; these rows are evidence and are never edited. */
@@ -132,9 +224,17 @@ export function record(o: Observation) {
   return { store: o.store, changed: true, digest };
 }
 
+/**
+ * The most recent look that actually saw the store. A failed read (rekordbox
+ * open and holding its database, master.db missing) is still recorded as
+ * evidence of the attempt, but it saw nothing — treating it as "rekordbox has
+ * no playlists" made every applied change read as owed again.
+ */
 export function latest(store: StoreName): Observation | null {
   const r = db.query<{ payload: string }, [string]>(
-    "SELECT payload FROM observations WHERE store=? ORDER BY observed_at DESC LIMIT 1",
+    `SELECT payload FROM observations WHERE store=?
+       AND coalesce(json_extract(payload, '$.available'), 1) = 1
+     ORDER BY observed_at DESC LIMIT 1`,
   ).get(store);
   return r ? (JSON.parse(r.payload) as Observation) : null;
 }
@@ -146,6 +246,7 @@ export function history(store?: StoreName) {
          WHERE store=? ORDER BY observed_at DESC LIMIT 50`).all(store)
     : db.query<Record<string, unknown>, []>(
         `SELECT id,store,observed_at,tracks,playlists,digest FROM observations
+         WHERE store IN ('fs','rekordbox')
          ORDER BY observed_at DESC LIMIT 50`).all();
   return rows;
 }
@@ -159,55 +260,51 @@ export function compare(obs: Record<StoreName, Observation>) {
   const hashByPath = new Map<string, string>();
   for (const r of db.query<{ path: string; content_hash: string | null }, []>(
     "SELECT path, content_hash FROM tracks").all()) {
-    if (r.content_hash) hashByPath.set(r.path, r.content_hash);
+    if (r.content_hash) hashByPath.set(pathKey(r.path), r.content_hash);
   }
-  const key = (p: string) => hashByPath.get(p) ?? `p:${p.toLowerCase()}`;
+  const key = (p: string) => hashByPath.get(pathKey(p)) ?? `p:${pathKey(p)}`;
   const keysOf = (o: Observation) => new Set(o.paths.map(key));
+  const inLibrary = (p: string) => pathKey(p).startsWith(`${pathKey(LIB)}/`);
 
   const fs = keysOf(obs.fs);
-  const ser = keysOf(obs.serato);
-  const rbx = keysOf(obs.rekordbox);
+  // Rekordbox's collection also contains its own sampler presets outside the
+  // user's music folder. They exist on disk, but are not part of this library.
+  const rbx = new Set(obs.rekordbox.paths.filter(inLibrary).map(key));
   const diff = (a: Set<string>, b: Set<string>) => [...a].filter((x) => !b.has(x)).length;
 
   const names = [...new Set([
-    ...Object.keys(obs.fs.groups), ...Object.keys(obs.serato.groups),
+    ...Object.keys(obs.fs.groups),
     ...Object.keys(obs.rekordbox.groups),
   ])].filter((n) => n !== "(root)").sort();
 
   return {
     totals: {
       fs: fs.size,
-      serato: ser.size,
       rekordbox: rbx.size,
     },
     missing: {
-      notInSerato: diff(fs, ser),
       notInRekordbox: diff(fs, rbx),
-      seratoNotOnDisk: diff(ser, fs),
       rekordboxNotOnDisk: diff(rbx, fs),
     },
     dangling: {
-      serato: obs.serato.dangling.length,
-      rekordbox: obs.rekordbox.dangling.length,
+      rekordbox: obs.rekordbox.dangling.filter(inLibrary).length,
     },
     available: {
       fs: obs.fs.available,
-      serato: obs.serato.available,
       rekordbox: obs.rekordbox.available,
       rekordboxReason: obs.rekordbox.reason ?? null,
     },
     groups: names.map((name) => {
-      // Crate and folder names have drifted in case ("Vibe" vs "vibe").
+      // Playlist and folder names can drift in case ("Vibe" vs "vibe").
       const lookup = (g: Record<string, string[]>) =>
         g[name] ?? g[Object.keys(g).find((k) => k.toLowerCase() === name.toLowerCase()) ?? ""] ?? [];
       const f = lookup(obs.fs.groups);
-      const s = lookup(obs.serato.groups);
       const r = lookup(obs.rekordbox.groups);
-      const caseOnly = !obs.fs.groups[name] || !obs.serato.groups[name] || !obs.rekordbox.groups[name];
+      const caseOnly = !obs.fs.groups[name] || !obs.rekordbox.groups[name];
       return {
-        name, fs: f.length, serato: s.length, rekordbox: r.length,
-        agree: f.length === s.length && s.length === r.length,
-        caseMismatch: caseOnly && (f.length > 0 || s.length > 0 || r.length > 0),
+        name, fs: f.length, rekordbox: r.length,
+        agree: f.length === r.length,
+        caseMismatch: caseOnly && (f.length > 0 || r.length > 0),
       };
     }),
   };

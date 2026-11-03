@@ -1,24 +1,52 @@
 import { useEffect, useState } from "react";
 import { api, unwrap, type Op, type PlanFor, type StoresView } from "./api";
-import { Modal } from "./Modals";
+import { Mark, Modal, Wait, plural } from "./Modals";
+import { EmptyState, Icon, Segmented } from "./ui";
 
-const STORES = ["rekordbox", "serato", "fs"] as const;
+const STORES = ["rekordbox", "fs"] as const;
 type StoreName = (typeof STORES)[number];
 
-const LABEL: Record<StoreName, string> = {
-  rekordbox: "rekordbox", serato: "Serato", fs: "Filesystem",
-};
+/** Start-of-label form, for controls and column heads. */
+const LABEL: Record<StoreName, string> = { rekordbox: "Rekordbox", fs: "Disk" };
+/** Mid-sentence form. */
+const NAME: Record<StoreName, string> = { rekordbox: "rekordbox", fs: "disk" };
 
 const ago = (ts: number | null | undefined) => {
   if (!ts) return "never";
   const s = Math.floor(Date.now() / 1000) - ts;
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+
+type Tone = "" | "ok" | "warn" | "danger";
+
+/** Plan actions, in the words you would use applying them by hand. */
+const ACTION: Record<string, [string, Tone]> = {
+  create_playlist: ["Create", "ok"],
+  delete_playlist: ["Delete", "danger"],
+  rename_playlist: ["Rename", ""],
+  add: ["Add", "ok"],
+  remove: ["Remove", "warn"],
+  delete_file: ["Delete", "danger"],
+  edit_metadata: ["Edit", ""],
+};
+
+/** Logged changes, same vocabulary. */
+const OP: Record<string, [string, Tone]> = {
+  create_playlist: ["Create", "ok"],
+  delete_playlist: ["Delete", "danger"],
+  rename_playlist: ["Rename", ""],
+  add_to: ["Add", "ok"],
+  remove_from: ["Remove", "warn"],
+  delete_track: ["Delete", "danger"],
+  download_track: ["Download", "ok"],
+  edit_metadata: ["Edit", ""],
 };
 
 /**
- * The three stores side by side, plus the per-store replay plan.
+ * The observed stores side by side, plus the per-store replay plan.
  * Nothing here writes anywhere — the plan is the list to apply by hand.
  */
 export function StoresModal({ onClose, notify }: {
@@ -33,7 +61,14 @@ export function StoresModal({ onClose, notify }: {
 
   const refresh = async () => {
     setBusy(true);
-    try { setData(await unwrap(api.stores.get())); }
+    try {
+      const [nextData, nextPlan] = await Promise.all([
+        unwrap(api.stores.get()),
+        unwrap(api.plan({ store }).get()),
+      ]);
+      setData(nextData);
+      setPlan(nextPlan);
+    }
     catch (e) { notify((e as Error).message, "err"); }
     setBusy(false);
   };
@@ -47,116 +82,118 @@ export function StoresModal({ onClose, notify }: {
 
   return (
     <Modal
-      title="Stores · where the library actually lives"
+      title="Rekordbox and disk"
       onClose={onClose}
       footer={
         <>
-          <button className="pill" onClick={refresh} disabled={busy}>
-            {busy ? "Reading…" : "↻ Re-observe all three"}
-          </button>
           {tab === "plan" ? (
-            <a className="pill" href={`/api/plan/${store}/text`} download style={{ textDecoration: "none" }}>
-              ↓ plan-{store}.txt
-            </a>
+            <a
+              className="ui-btn outline" href={`/api/plan/${store}/text`} download
+              title={`Download the ${NAME[store]} plan. Nothing is written to ${NAME[store]}; apply it yourself.`}
+            ><Icon name="export" />Download plan</a>
           ) : null}
-          <span className="mut">
-            Nothing is written to Serato or rekordbox. This is the list to apply yourself.
-          </span>
+          <button
+            type="button" className="ui-btn primary" onClick={refresh} disabled={busy}
+            title="Read rekordbox and the disk again"
+          ><Icon name="sync" />{busy ? "Checking…" : "Check again"}</button>
         </>
       }
     >
-      <div className="banner">
-        No store is the source of truth — they have diverged. Identity is the audio
-        content hash, so a track is the same track across renames and folder moves.
-      </div>
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-        {(["drift", "plan"] as const).map((t) => (
-          <button key={t} className={`pill ${tab === t ? "go" : ""}`} onClick={() => setTab(t)}>
-            {t === "drift" ? "Drift" : "Replay plan"}
-          </button>
-        ))}
-        <div className="spacer" />
-        {tab === "plan" ? STORES.map((s) => (
-          <button key={s} className={`pill ${store === s ? "go" : ""}`} onClick={() => setStore(s)}>
-            {LABEL[s]}
-          </button>
-        )) : null}
+      <div className="modal-bar">
+        <Segmented
+          label="View" value={tab} onChange={setTab}
+          options={[{ value: "drift", label: "Files & folders" }, { value: "plan", label: "To apply" }]}
+        />
+        {tab === "plan" ? (
+          <span className="push">
+            <Segmented
+              label="Apply to" value={store} onChange={setStore}
+              options={STORES.map((s) => ({ value: s, label: LABEL[s] }))}
+            />
+          </span>
+        ) : null}
       </div>
 
       {tab === "drift" ? (
-        !c ? <div className="mut">Reading stores…</div> : (
+        !c ? <Wait /> : (
           <>
-            <div className="dl" style={{ borderBottom: "1px solid var(--line)" }}>
-              <span className="grow"><b>Store</b></span>
-              <span className="mut" style={{ width: 90, textAlign: "right" }}>unique tracks</span>
-              <span className="mut" style={{ width: 110, textAlign: "right" }}>points at missing</span>
-            </div>
-            {STORES.map((s) => (
-              <div className="dl" key={s}>
-                <span className={`s ${c.available[s] ? "m" : "x"}`}>{c.available[s] ? "ok" : "off"}</span>
-                <span className="grow">
-                  {LABEL[s]}
-                  {s === "rekordbox" && c.available.rekordboxReason
-                    ? <span className="mut"> — {c.available.rekordboxReason}</span> : null}
-                </span>
-                <span style={{ width: 90, textAlign: "right" }}>{c.totals[s]}</span>
-                <span style={{ width: 110, textAlign: "right" }} className="mut">
-                  {s === "serato" ? c.dangling.serato : s === "rekordbox" ? c.dangling.rekordbox : "—"}
-                </span>
-              </div>
-            ))}
-
-            <div className="mut" style={{ margin: "14px 0 8px" }}>
-              On disk but missing from Serato: <b>{c.missing.notInSerato}</b> ·
-              missing from rekordbox: <b>{c.missing.notInRekordbox}</b> ·
-              rekordbox referencing tracks not on disk: <b>{c.missing.rekordboxNotOnDisk}</b>
-            </div>
-
-            <div className="dl" style={{ borderBottom: "1px solid var(--line)" }}>
-              <span className="grow"><b>Playlist</b></span>
+            <div className="stat-row">
               {STORES.map((s) => (
-                <span key={s} className="mut" style={{ width: 76, textAlign: "right" }}>{LABEL[s]}</span>
+                <div className="stat" key={s}>
+                  <div className="stat-hd">
+                    {LABEL[s]}
+                    <span
+                      className={`ui-tag ${c.available[s] ? "ok" : "danger"}`}
+                      title={s === "rekordbox" ? c.available.rekordboxReason ?? undefined : undefined}
+                    ><span className="ui-dot" />{c.available[s] ? "Connected" : "Unavailable"}</span>
+                  </div>
+                  <div className="stat-n">{c.totals[s]}</div>
+                  <div className="stat-sub">
+                    {s === "rekordbox" && c.dangling.rekordbox
+                      ? `tracks · ${plural(c.dangling.rekordbox, "missing file")}` : "tracks"}
+                  </div>
+                </div>
               ))}
             </div>
-            {c.groups.map((g) => (
-              <div className="dl" key={g.name}>
-                <span className={`s ${g.agree ? "" : "e"}`}>{g.agree ? "" : "drift"}</span>
-                <span className="grow">
-                  {g.name}
-                  {g.caseMismatch ? <span className="tag bad">case</span> : null}
-                </span>
-                <span style={{ width: 76, textAlign: "right" }}>{g.rekordbox}</span>
-                <span style={{ width: 76, textAlign: "right" }}>{g.serato}</span>
-                <span style={{ width: 76, textAlign: "right" }}>{g.fs}</span>
+
+            <div className="dlist">
+              <div className="dl">
+                <span className="grow">On disk, not in rekordbox</span>
+                <span className="col">{c.missing.notInRekordbox}</span>
               </div>
-            ))}
+              <div className="dl">
+                <span className="grow">In rekordbox, not on disk</span>
+                <span className="col">{c.missing.rekordboxNotOnDisk}</span>
+              </div>
+            </div>
+
+            <h3 className="modal-sub" title="A track can be in several playlists but only one disk folder">Playlists / folders</h3>
+            <div className="dlist">
+              <div className="dl head">
+                <span className="grow">Name</span>
+                <span className="col">Playlist</span>
+                <span className="col">Folder</span>
+              </div>
+              {c.groups.map((g) => (
+                <div className="dl" key={g.name}>
+                  <span className="grow">{g.name}</span>
+                  <span className="col">{g.rekordbox}</span>
+                  <span className="col">{g.fs}</span>
+                </div>
+              ))}
+            </div>
           </>
         )
       ) : !plan ? (
-        <div className="mut">Computing plan…</div>
+        <Wait />
       ) : (
         <>
-          <div className="mut" style={{ marginBottom: 10 }}>
-            {plan.pending} to apply to {LABEL[store]} · {plan.satisfied} already match ·
-            observed {ago(plan.observedAt)}
-            {plan.stale ? " · no observation yet, re-observe first" : ""}
-          </div>
+          <p className="mut lead">
+            {plan.pending} to apply · {plan.satisfied} done · checked {ago(plan.observedAt)}
+            {plan.stale
+              ? <> <span className="ui-tag warn" title="Press Check again for an up-to-date plan">Out of date</span></>
+              : null}
+          </p>
           {!plan.actions.length ? (
-            <div className="mut">No staged changes yet.</div>
-          ) : plan.actions.map((a, i) => (
-            <div className="dl" key={i} style={a.satisfied ? { opacity: 0.45 } : undefined}>
-              <span className={`s ${a.action === "add" || a.action === "create_playlist" ? "m"
-                : a.action === "delete_file" ? "x" : "e"}`}>
-                {a.satisfied ? "ok" : a.action.replace("_playlist", "").replace("_file", "")}
-              </span>
-              <span className="grow">
-                {a.label ?? a.playlist ?? a.path}
-                {a.playlist && a.label ? <span className="mut"> → {a.playlist}</span> : null}
-              </span>
-              <span className="mut">{a.satisfied ? "already matches" : ""}</span>
+            <EmptyState title="Nothing to apply" />
+          ) : (
+            <div className="dlist">
+              {plan.actions.map((a, i) => {
+                const [label, tone] = ACTION[a.action] ?? [a.action, ""];
+                return (
+                  <div className={`dl ${a.satisfied ? "done" : ""}`} key={i}>
+                    {a.satisfied
+                      ? <Mark title={`Already matches ${NAME[store]}`}><Icon name="check" stroke={2.2} />Done</Mark>
+                      : <Mark tone={tone}>{label}</Mark>}
+                    <span className="grow" title={a.path}>
+                      {a.label ?? a.playlist ?? a.path}
+                      {a.playlist && a.label ? <span className="mut"> · {a.playlist}</span> : null}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-          ))}
+          )}
         </>
       )}
     </Modal>
@@ -180,38 +217,35 @@ export function OpsModal({ onClose, notify, onChange }: {
   const undo = async (id: number) => {
     try {
       await unwrap(api.ops.undo.post({ ids: [id] }));
-      load(); onChange(); notify("Op undone", "ok");
+      load(); onChange(); notify("Change undone", "ok");
     } catch (e) { notify((e as Error).message, "err"); }
   };
 
   return (
-    <Modal
-      title="Change log · replayable intent"
-      onClose={onClose}
-      footer={<span className="mut">
-        Keyed by content hash and playlist name, so the same op replays against any store.
-      </span>}
-    >
-      {!ops ? <div className="mut">Loading…</div>
-        : !ops.length ? <div className="mut">Nothing staged yet.</div>
-        : ops.map((o) => (
-          <div className="dl" key={o.id}>
-            <span className={`s ${o.kind.startsWith("add") || o.kind === "create_playlist" ? "m"
-              : o.kind === "delete_track" ? "x" : "e"}`}>
-              {o.kind.replace("_playlist", "").replace("_track", "").replace("_to", "").replace("_from", "")}
-            </span>
-            <span className="grow">
-              {o.track_label ?? o.playlist}
-              {o.track_label && o.playlist ? <span className="mut"> → {o.playlist}</span> : null}
-              {o.to_playlist ? <span className="mut"> → {o.to_playlist}</span> : null}
-            </span>
-            <span className="mut" title={o.track_hash ?? ""}>
-              {o.track_hash ? o.track_hash.slice(0, 8) : ""}
-            </span>
-            <span className="mut">{ago(o.at)}</span>
-            <button className="act" onClick={() => undo(o.id)}>undo</button>
+    <Modal title="Change log" onClose={onClose}>
+      {!ops ? <Wait />
+        : !ops.length ? <EmptyState title="No changes yet" />
+        : (
+          <div className="dlist">
+            {ops.map((o) => {
+              const [label, tone] = OP[o.kind] ?? [o.kind, ""];
+              return (
+                <div className="dl" key={o.id}>
+                  <Mark tone={tone}>{label}</Mark>
+                  <span className="grow">
+                    {o.track_label ?? o.playlist}
+                    {o.track_label && o.playlist ? <span className="mut"> · {o.playlist}</span> : null}
+                    {o.to_playlist ? <span className="mut"> to {o.to_playlist}</span> : null}
+                  </span>
+                  <span className="end">{ago(o.at)}</span>
+                  <button type="button" className="ui-btn sm ghost" onClick={() => undo(o.id)}>
+                    <Icon name="undo" />Undo
+                  </button>
+                </div>
+              );
+            })}
           </div>
-        ))}
+        )}
     </Modal>
   );
 }

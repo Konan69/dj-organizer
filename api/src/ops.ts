@@ -3,27 +3,28 @@
  *
  * Every edit is recorded as an operation keyed by CONTENT HASH and playlist
  * NAME — never by path, mtime or an internal row id. That is what makes the log
- * replayable: the same op can be applied to the filesystem, to Serato, or to
- * rekordbox, each of which identifies tracks differently and has drifted from
- * the others.
+ * replayable: the same op can be applied to the filesystem or rekordbox, each
+ * of which identifies tracks differently and may have drifted from the other.
  *
  * Nothing here writes to an external store. `plan()` turns the log into the
  * concrete list of actions a given store still needs, which is what gets
  * applied — by hand for now.
  */
 import { db, log, now } from "./db";
+import { pathKey } from "./paths";
 import { latest, type Observation, type StoreName } from "./stores";
 
 export type OpKind =
   | "create_playlist" | "delete_playlist" | "rename_playlist"
-  | "add_to" | "remove_from" | "delete_track";
+  | "add_to" | "remove_from" | "delete_track" | "download_track"
+  | "edit_metadata";
 
 export type Op = {
   id: number; at: number; kind: OpKind;
   playlist: string | null; to_playlist: string | null;
   track_hash: string | null; track_path: string | null; track_label: string | null;
   payload: string | null; undone: number;
-  applied_serato: number; applied_rekordbox: number; applied_fs: number;
+  applied_rekordbox: number; applied_fs: number;
 };
 
 const insert = db.query<{ id: number }, [
@@ -43,6 +44,52 @@ export function record(kind: OpKind, o: {
     o.payload === undefined ? null : JSON.stringify(o.payload),
   )!;
   return row.id;
+}
+
+/** A completed download is history, not pending work for an external store. */
+export function recordDownload(o: {
+  playlist: string; path: string; title: string; videoId: string; trackHash: string;
+}) {
+  const id = record("download_track", {
+    playlist: o.playlist,
+    trackHash: o.trackHash,
+    trackPath: o.path,
+    trackLabel: o.title,
+    payload: { videoId: o.videoId },
+  });
+  const ts = now();
+  db.query(
+    `UPDATE ops SET applied_rekordbox=?,applied_fs=? WHERE id=?`,
+  ).run(ts, ts, id);
+  return id;
+}
+
+export function recordMetadataEdit(o: {
+  trackHash: string;
+  trackLabel: string;
+  from: { title: string | null; artist: string | null };
+  to: { title: string | null; artist: string | null };
+}) {
+  const id = record("edit_metadata", {
+    trackHash: o.trackHash,
+    trackLabel: o.trackLabel,
+    payload: { from: o.from, to: o.to },
+  });
+  // Files are never retagged, so there is deliberately no filesystem action.
+  db.query("UPDATE ops SET applied_fs=? WHERE id=?").run(now(), id);
+  return id;
+}
+
+export function withdrawPendingMetadataEdits(trackHash: string) {
+  const applied = db.query<{ found: number }, [string]>(`SELECT 1 AS found FROM ops
+    WHERE kind='edit_metadata' AND track_hash=? AND undone=0
+      AND applied_rekordbox<>0
+    LIMIT 1`).get(trackHash) !== null;
+  // Work that never left staging can be withdrawn instead of replayed twice.
+  const undone = db.query(`UPDATE ops SET undone=1
+    WHERE kind='edit_metadata' AND track_hash=? AND undone=0
+      AND applied_rekordbox=0`).run(trackHash).changes;
+  return { applied, undone };
 }
 
 /** Bulk membership change: one op per track, so each is independently replayable. */
@@ -81,8 +128,7 @@ export function undo(ids: number[]) {
 }
 
 export function markApplied(store: StoreName, ids: number[]) {
-  const col = store === "serato" ? "applied_serato"
-    : store === "rekordbox" ? "applied_rekordbox" : "applied_fs";
+  const col = store === "rekordbox" ? "applied_rekordbox" : "applied_fs";
   const q = db.query(`UPDATE ops SET ${col}=? WHERE id=?`);
   const ts = now();
   db.transaction(() => { for (const id of ids) q.run(ts, id); })();
@@ -92,23 +138,24 @@ export function markApplied(store: StoreName, ids: number[]) {
 
 export function stats() {
   const row = db.query<{
-    total: number; open: number; serato: number; rekordbox: number;
+    total: number; open: number; rekordbox: number; fs: number;
   }, []>(`SELECT COUNT(*) total,
       SUM(CASE WHEN undone=0 THEN 1 ELSE 0 END) open,
-      SUM(CASE WHEN undone=0 AND applied_serato=0 THEN 1 ELSE 0 END) serato,
-      SUM(CASE WHEN undone=0 AND applied_rekordbox=0 THEN 1 ELSE 0 END) rekordbox
+      SUM(CASE WHEN undone=0 AND applied_rekordbox=0 THEN 1 ELSE 0 END) rekordbox,
+      SUM(CASE WHEN undone=0 AND applied_fs=0 THEN 1 ELSE 0 END) fs
     FROM ops`).get()!;
   return {
     total: row.total ?? 0,
     open: row.open ?? 0,
-    pending: { serato: row.serato ?? 0, rekordbox: row.rekordbox ?? 0 },
+    pending: { rekordbox: row.rekordbox ?? 0, fs: row.fs ?? 0 },
   };
 }
 
 /* ---------------------------------------------------------------- planning */
 
 export type PlanAction = {
-  action: "create_playlist" | "delete_playlist" | "rename_playlist" | "add" | "remove" | "delete_file";
+  action: "create_playlist" | "delete_playlist" | "rename_playlist"
+    | "add" | "remove" | "delete_file" | "edit_metadata";
   playlist?: string;
   toPlaylist?: string;
   path?: string;
@@ -141,11 +188,12 @@ export function plan(store: StoreName, obs?: Observation | null): {
 
   for (const op of ops) {
     if (op.kind === "add_to" || op.kind === "remove_from") {
-      const key = `${op.playlist}\u0000${op.track_hash ?? op.track_path}`;
+      const trackKey = op.track_hash ?? (op.track_path ? pathKey(op.track_path) : null);
+      const key = `${op.playlist}\u0000${trackKey}`;
       const prev = membership.get(key);
       membership.set(key, { op, ids: [...(prev?.ids ?? []), op.id] });
     } else if (op.kind === "delete_track") {
-      const key = op.track_hash ?? op.track_path ?? String(op.id);
+      const key = op.track_hash ?? (op.track_path ? pathKey(op.track_path) : String(op.id));
       const prev = deletions.get(key);
       deletions.set(key, { op, ids: [...(prev?.ids ?? []), op.id] });
     } else {
@@ -162,8 +210,32 @@ export function plan(store: StoreName, obs?: Observation | null): {
   };
 
   const actions: PlanAction[] = [];
+  const labelQ = db.query<{
+    title: string | null; artist: string | null; filename: string;
+  }, [string]>(`SELECT COALESCE(o.title,t.title) AS title,
+      COALESCE(o.artist,t.artist) AS artist,t.filename
+    FROM tracks t LEFT JOIN track_overrides o ON o.track_hash=t.content_hash
+    WHERE t.content_hash=? ORDER BY t.missing,t.id LIMIT 1`);
+  const currentLabel = (op: Op) => {
+    const track = op.track_hash ? labelQ.get(op.track_hash) : null;
+    return track
+      ? [track.artist, track.title].filter(Boolean).join(" - ") || track.filename
+      : op.track_label ?? undefined;
+  };
 
   for (const op of playlistOps) {
+    if (op.kind === "edit_metadata") {
+      if (store === "fs") continue;
+      const applied = op.applied_rekordbox;
+      actions.push({
+        action: "edit_metadata",
+        label: currentLabel(op),
+        hash: op.track_hash,
+        satisfied: applied !== 0,
+        opIds: [op.id],
+      });
+      continue;
+    }
     const exists = lookup(op.playlist).length > 0
       || Object.keys(groups).some((k) => k.toLowerCase() === (op.playlist ?? "").toLowerCase());
     if (op.kind !== "create_playlist" && op.kind !== "delete_playlist"
@@ -172,20 +244,22 @@ export function plan(store: StoreName, obs?: Observation | null): {
       action: op.kind,
       playlist: op.playlist ?? undefined,
       toPlaylist: op.to_playlist ?? undefined,
-      satisfied: op.kind === "create_playlist" ? exists : op.kind === "delete_playlist" ? !exists : false,
+      satisfied: op.kind === "create_playlist" ? exists
+        : op.kind === "delete_playlist" ? !exists
+        : !exists && Object.keys(groups).some((k) => k.toLowerCase() === (op.to_playlist ?? "").toLowerCase()),
       opIds: [op.id],
     });
   }
 
   for (const { op, ids } of membership.values()) {
-    const members = new Set(lookup(op.playlist).map((p) => p.toLowerCase()));
-    const present = op.track_path ? members.has(op.track_path.toLowerCase()) : false;
+    const members = new Set(lookup(op.playlist).map(pathKey));
+    const present = op.track_path ? members.has(pathKey(op.track_path)) : false;
     const want = op.kind === "add_to";
     actions.push({
       action: want ? "add" : "remove",
       playlist: op.playlist ?? undefined,
       path: op.track_path ?? undefined,
-      label: op.track_label ?? undefined,
+      label: currentLabel(op),
       hash: op.track_hash,
       satisfied: want ? present : !present,
       opIds: ids,
@@ -194,11 +268,11 @@ export function plan(store: StoreName, obs?: Observation | null): {
 
   for (const { op, ids } of deletions.values()) {
     const stillReferenced = Object.values(groups).some((paths) =>
-      paths.some((p) => p.toLowerCase() === (op.track_path ?? "").toLowerCase()));
+      paths.some((p) => pathKey(p) === pathKey(op.track_path ?? "")));
     actions.push({
       action: "delete_file",
       path: op.track_path ?? undefined,
-      label: op.track_label ?? undefined,
+      label: currentLabel(op),
       hash: op.track_hash,
       satisfied: !stillReferenced,
       opIds: ids,
@@ -206,10 +280,12 @@ export function plan(store: StoreName, obs?: Observation | null): {
   }
 
   const satisfied = actions.filter((a) => a.satisfied).length;
+  const newestOpenAt = ops.length ? ops[ops.length - 1]!.at : null;
+  const observedAt = observation?.observedAt ?? null;
   return {
     store,
-    observedAt: observation?.observedAt ?? null,
-    stale: !observation,
+    observedAt,
+    stale: observedAt === null || (newestOpenAt !== null && observedAt < newestOpenAt),
     actions,
     satisfied,
     pending: actions.length - satisfied,
@@ -249,6 +325,8 @@ export function planText(store: StoreName) {
           L.push(`  RENAME         ${a.playlist} -> ${a.toPlaylist}`); break;
         case "delete_file":
           L.push(`  x ${a.label ?? ""}  ${rel(a.path)}`.trimEnd()); break;
+        case "edit_metadata":
+          L.push(`  ~ ${a.label ?? ""}  (edit metadata)`.trimEnd()); break;
         default:
           L.push(`  ${a.action === "add" ? "+" : "-"} ${a.label ?? ""}  ${rel(a.path)}`.trimEnd());
       }

@@ -62,8 +62,12 @@ type Row = {
  */
 export function build(opts: { playlists?: string[]; includeUnfiled?: boolean } = {}) {
   const tracks = db.query<Row, []>(
-    `SELECT id,path,filename,ext,folder,title,artist,album,genre,duration,bitrate,size,added_at
-     FROM tracks WHERE missing=0 ORDER BY artist,title`).all();
+    `SELECT t.id,t.path,t.filename,t.ext,t.folder,
+            COALESCE(o.title,t.title) AS title,COALESCE(o.artist,t.artist) AS artist,
+            t.album,t.genre,t.duration,t.bitrate,t.size,t.added_at
+     FROM tracks t LEFT JOIN track_overrides o ON o.track_hash=t.content_hash
+     WHERE t.missing=0
+     ORDER BY COALESCE(o.artist,t.artist),COALESCE(o.title,t.title)`).all();
 
   const pls = db.query<{ id: number; name: string }, []>(
     "SELECT id,name FROM playlists ORDER BY sort,name").all()
