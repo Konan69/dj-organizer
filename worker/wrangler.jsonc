@@ -1,0 +1,10 @@
+{
+  "name": "dj-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "dj-sync", "database_id": "<your D1 database id from `wrangler d1 create dj-sync`>" }
+  ],
+  "observability": { "enabled": true }
+}
