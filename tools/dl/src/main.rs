@@ -177,7 +177,7 @@ fn run_soundcloud(url: &str, out_dir: &str, list_formats: bool) -> Result<i32, S
         }
     }
 
-    if let Ok(proxy) = env::var("RAILWAY_PROXY_URL") {
+    if let Ok(proxy) = env::var("SOUNDCLOUD_PROXY_URL") {
         if !proxy.trim().is_empty() {
             args.extend(["--proxy".to_string(), proxy]);
         }
