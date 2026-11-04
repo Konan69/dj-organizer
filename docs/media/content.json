@@ -1,0 +1,116 @@
+{
+  "repo": "dj-organizer",
+  "accent": "#6EC1FF",
+  "hero": {
+    "command": "DJ_LIBRARY_ROOT=$PWD/fixtures/library ./serve.sh start",
+    "output": [
+      {
+        "text": "up   http://localhost:8765   (pid 73750)",
+        "style": "muted"
+      },
+      {
+        "text": "$ curl -s -X POST localhost:8765/api/duplicates/resolve"
+      },
+      {
+        "text": "{\"groups\":1,\"staged\":1,\"membershipsMerged\":0,\"skippedManual\":0,\"reclaim\":34054}",
+        "style": "muted"
+      },
+      {
+        "text": "$ curl -s localhost:8765/api/changes.txt"
+      },
+      {
+        "text": "# dj-organizer changeset",
+        "style": "muted"
+      },
+      {
+        "text": "# generated 2026-11-04T15:51:47.951Z",
+        "style": "muted"
+      },
+      {
+        "text": ""
+      },
+      {
+        "text": "## delete by hand (1) — this app moves nothing"
+      },
+      {
+        "text": "  x Techno/Example Artist - First Light (copy).m4a   [duplicate]",
+        "style": "accent"
+      }
+    ],
+    "value": "It finds the duplicate. You delete it by hand."
+  },
+  "diagram": {
+    "direction": "TB",
+    "nodes": [
+      {
+        "id": "rbx",
+        "label": "rekordbox",
+        "sublabel": "master.db, read-only"
+      },
+      {
+        "id": "tools",
+        "label": "tools/",
+        "sublabel": "dl, stem-grid, .psm1"
+      },
+      {
+        "id": "worker",
+        "label": "dj-sync Worker",
+        "sublabel": "worker/, D1 snapshot"
+      },
+      {
+        "id": "lib",
+        "label": "Library folder",
+        "sublabel": "DJ_LIBRARY_ROOT"
+      },
+      {
+        "id": "api",
+        "label": "API",
+        "sublabel": "api/src, bun:sqlite"
+      },
+      {
+        "id": "ui",
+        "label": "Staging UI",
+        "sublabel": "web/src"
+      },
+      {
+        "id": "plans",
+        "label": "Plans",
+        "sublabel": "changes.txt, XML"
+      }
+    ],
+    "edges": [
+      {
+        "from": "tools",
+        "to": "lib",
+        "label": "adds files"
+      },
+      {
+        "from": "lib",
+        "to": "api"
+      },
+      {
+        "from": "rbx",
+        "to": "api"
+      },
+      {
+        "from": "worker",
+        "to": "api"
+      },
+      {
+        "from": "api",
+        "to": "ui",
+        "label": "HTTP"
+      },
+      {
+        "from": "api",
+        "to": "plans",
+        "label": "export"
+      }
+    ],
+    "primary": [
+      "lib",
+      "api",
+      "plans"
+    ]
+  }
+}
