@@ -1,6 +1,6 @@
 # dj-organizer
 
-*A crate-digger with good manners. It suggests, you decide, and nothing moves until you say so.*
+Clean up a DJ library without touching it until you say so.
 
 A local web app for DJs that scans a music folder, finds duplicate tracks, stages playlist changes and writes them out as plans you apply yourself, so your files and rekordbox library stay untouched until you decide.
 
