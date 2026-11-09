@@ -4,7 +4,7 @@ Clean up a DJ library without touching it until you say so.
 
 My library grows from downloads, rips, rekordbox imports and set prep, so the same audio ends up in two folders under two names, and rekordbox and the disk drift apart. Tools that fix this by moving files are risky on a library you play live from. dj-organizer scans the folder, identifies tracks by a hash of the audio (so a renamed or retagged file is still the same track), finds duplicates, and lets you stage playlist changes in a local web UI. Nothing leaves the app except as a text plan, a rekordbox XML, or one guarded apply that backs up `master.db` first.
 
-![A terminal starts dj-organizer on the sample library, stages the one duplicate track and prints the changeset that tells you to delete the copy by hand](docs/media/hero.gif)
+![Explainer: the six fixture files get their real xxHash64 audio hashes, the renamed copy matches the original (4d51367a85d6acc9) so one is kept and the copy staged; then real captures of the app show it under Pending deletes and the plain-text plan that says to delete it by hand](docs/media/hero.gif)
 
 ## Install
 
